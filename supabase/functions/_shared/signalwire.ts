@@ -76,27 +76,16 @@ export function toSwIdentity(email: string): string {
 }
 
 export async function createWebRtcToken(identity: string) {
-  const reference = toSwIdentity(identity);
+  const resource = toSwIdentity(identity);
   const spaceUrl = getSpaceUrl();
   const auth = getAuthHeader();
 
-  // Ensure Fabric subscriber exists (idempotent — 409 if already created)
-  try {
-    const subRes = await fetch(`https://${spaceUrl}/api/fabric/subscribers`, {
-      method: 'POST',
-      headers: { Authorization: auth, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reference, display_name: identity }),
-    });
-    console.log('Fabric subscriber create:', subRes.status, await subRes.text());
-  } catch (e) {
-    console.log('Subscriber create error:', e);
-  }
-
-  // Issue a Subscriber Access Token (SAT) for @signalwire/js Fabric SDK
-  const res = await fetch(`https://${spaceUrl}/api/fabric/subscribers/tokens`, {
+  // Issue a Relay REST JWT — the WebRTC.Client (v2) registers as a VERTO client
+  // which is what LaML <Dial><Client> can reach.
+  const res = await fetch(`https://${spaceUrl}/api/relay/rest/jwt`, {
     method: 'POST',
     headers: { Authorization: auth, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ reference }),
+    body: JSON.stringify({ expires_in: 3600, resource }),
   });
   return res.json();
 }

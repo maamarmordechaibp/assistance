@@ -67,6 +67,7 @@ export default function RepDashboard() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [webrtcToken, setWebrtcToken] = useState<string | null>(null);
+  const [signalwireProjectId, setSignalwireProjectId] = useState<string | null>(null);
   const [selectedOutcome, setSelectedOutcome] = useState<string>('');
   const [extensionsUsed, setExtensionsUsed] = useState(0);
   const [maxExtensions, setMaxExtensions] = useState(2);
@@ -88,6 +89,7 @@ export default function RepDashboard() {
           const data = await res.json();
           setRepStatus(data.rep?.status || 'offline');
           if (data.webrtcToken) setWebrtcToken(data.webrtcToken);
+          if (data.signalwireProjectId) setSignalwireProjectId(data.signalwireProjectId);
         }
 
         // Load settings for call extensions
@@ -227,6 +229,7 @@ export default function RepDashboard() {
           if (tokenRes.ok) {
             const data = await tokenRes.json();
             if (data.webrtcToken) setWebrtcToken(data.webrtcToken);
+            if (data.signalwireProjectId) setSignalwireProjectId(data.signalwireProjectId);
           }
         } catch (err) {
           console.error('Failed to fetch WebRTC token:', err);
@@ -662,6 +665,7 @@ export default function RepDashboard() {
             </h3>
             <Softphone
               token={webrtcToken}
+              projectId={signalwireProjectId}
               onCallEnded={() => {
                 setActiveCall(null);
                 setCustomer(null);

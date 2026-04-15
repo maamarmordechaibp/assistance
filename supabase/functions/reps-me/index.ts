@@ -30,7 +30,8 @@ serve(async (req) => {
       console.error('SignalWire token error:', err);
     }
 
-    return new Response(JSON.stringify({ rep, webrtcToken }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    const signalwireProjectId = Deno.env.get('SIGNALWIRE_PROJECT_ID') || null;
+    return new Response(JSON.stringify({ rep, webrtcToken, signalwireProjectId }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 
   if (req.method === 'PATCH') {

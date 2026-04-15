@@ -14,13 +14,14 @@ import {
 
 interface SoftphoneProps {
   token: string | null;
+  projectId: string | null;
   onCallStarted?: (callId: string, fromNumber: string) => void;
   onCallEnded?: () => void;
 }
 
 type CallState = 'idle' | 'connecting' | 'ringing' | 'active' | 'ending';
 
-export default function Softphone({ token, onCallStarted, onCallEnded }: SoftphoneProps) {
+export default function Softphone({ token, projectId, onCallStarted, onCallEnded }: SoftphoneProps) {
   const [callState, setCallState] = useState<CallState>('idle');
   const [muted, setMuted] = useState(false);
   const [deafened, setDeafened] = useState(false);
@@ -33,58 +34,70 @@ export default function Softphone({ token, onCallStarted, onCallEnded }: Softpho
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Initialize SignalWire Fabric client
+  // Initialize SignalWire WebRTC.Client (VERTO) for incoming calls via <Dial><Client>
   useEffect(() => {
-    if (!token || typeof token !== 'string') return;
+    if (!token || typeof token !== 'string' || !projectId) return;
 
     let cancelled = false;
 
     async function initClient() {
       try {
-        const { SignalWire } = await import('@signalwire/js');
-
-        const client = await SignalWire({
+        const SW = await import('@signalwire/js');
+        // WebRTC.Client registers as a VERTO endpoint — LaML <Dial><Client> reaches it
+        const WebRTC = (SW as unknown as { WebRTC: { Client: new (opts: { project: string; token: string }) => unknown } }).WebRTC;
+        const client = new WebRTC.Client({
+          project: projectId!,
           token: token!,
         });
 
         if (cancelled) return;
-        clientRef.current = client;
-        setError(null);
 
-        // Fabric SDK: go online and register for incoming calls
-        const fabricClient = client as unknown as {
-          online: (opts: {
-            incomingCallHandlers: {
-              all?: (invite: unknown) => void;
-              websocket?: (invite: unknown) => void;
-            };
-          }) => Promise<unknown>;
-          offline: () => Promise<unknown>;
-          on: (event: string, handler: (...args: unknown[]) => void) => void;
-          disconnect: () => Promise<void>;
+        const c = client as unknown as {
+          on: (event: string, handler: (notification: { type: string; call: unknown }) => void) => void;
+          connect: () => Promise<void>;
+          disconnect: () => void;
         };
 
-        await fabricClient.online({
-          incomingCallHandlers: {
-            all: (inviteEvent: unknown) => {
-              if (cancelled) return;
-              const evt = inviteEvent as {
-                invite: {
-                  details: { callerIdNumber?: string; callerIdName?: string; callID?: string };
-                  accept: () => Promise<unknown>;
-                  reject: () => Promise<void>;
-                };
-              };
-              const invite = evt.invite;
-              callRef.current = invite;
-              const num = invite.details?.callerIdNumber || invite.details?.callerIdName || 'Unknown';
-              setCallerNumber(num);
+        c.on('signalwire.notification', (notification) => {
+          if (cancelled) return;
+          if (notification.type === 'callUpdate') {
+            const call = notification.call as {
+              id: string;
+              state: string;
+              from: string;
+              direction: string;
+              answer: () => Promise<void>;
+              hangup: () => Promise<void>;
+              toggleAudioMute: () => void;
+              toggleDeaf: () => void;
+              muteAudio: () => void;
+              unmuteAudio: () => void;
+              deaf: () => void;
+              undeaf: () => void;
+            };
+
+            if (call.state === 'ringing' && call.direction === 'inbound') {
+              callRef.current = call;
+              setCallerNumber(call.from || 'Unknown');
               setCallState('ringing');
-            },
-          },
+            } else if (call.state === 'active') {
+              setCallState('active');
+              onCallStarted?.(call.id, call.from || 'Unknown');
+            } else if (call.state === 'hangup' || call.state === 'destroy') {
+              callRef.current = null;
+              setCallState('idle');
+              setCallerNumber('');
+              setMuted(false);
+              setDeafened(false);
+              onCallEnded?.();
+            }
+          }
         });
 
-        console.log('SignalWire client online, ready for calls');
+        await c.connect();
+        clientRef.current = client;
+        setError(null);
+        console.log('SignalWire WebRTC client connected (VERTO), ready for calls');
       } catch (err) {
         console.error('SignalWire init error:', err);
         setError('Failed to connect to phone system');
@@ -96,15 +109,12 @@ export default function Softphone({ token, onCallStarted, onCallEnded }: Softpho
     return () => {
       cancelled = true;
       if (clientRef.current) {
-        const c = clientRef.current as {
-          offline?: () => Promise<void>;
-          disconnect?: () => Promise<void>;
-        };
-        c.offline?.().catch(() => {});
+        const c = clientRef.current as { disconnect?: () => void };
         c.disconnect?.();
+        clientRef.current = null;
       }
     };
-  }, [token]);
+  }, [token, projectId, onCallStarted, onCallEnded]);
 
   // Timer for active calls
   useEffect(() => {
@@ -135,15 +145,8 @@ export default function Softphone({ token, onCallStarted, onCallEnded }: Softpho
     if (!callRef.current) return;
     try {
       setCallState('connecting');
-      // Fabric SDK: callRef holds the invite object from incomingCallHandlers
-      const invite = callRef.current as {
-        accept: () => Promise<unknown>;
-        answer?: () => Promise<void>;
-      };
-      const roomSession = await invite.accept();
-      // Store the room session for hangup/mute
-      if (roomSession) callRef.current = roomSession;
-      setCallState('active');
+      const call = callRef.current as { answer: () => Promise<void> };
+      await call.answer();
     } catch (err) {
       console.error('Answer error:', err);
       setCallState('idle');
@@ -154,13 +157,8 @@ export default function Softphone({ token, onCallStarted, onCallEnded }: Softpho
     if (!callRef.current) return;
     try {
       setCallState('ending');
-      const call = callRef.current as {
-        hangup?: () => Promise<void>;
-        leave?: () => Promise<void>;
-        reject?: () => Promise<void>;
-      };
-      // Fabric SDK: active calls use leave(), invites use reject()
-      await (call.hangup || call.leave || call.reject)?.();
+      const call = callRef.current as { hangup: () => Promise<void> };
+      await call.hangup();
     } catch (err) {
       console.error('Hangup error:', err);
     } finally {
@@ -177,13 +175,16 @@ export default function Softphone({ token, onCallStarted, onCallEnded }: Softpho
     if (!callRef.current) return;
     try {
       const call = callRef.current as {
-        audioMute?: () => Promise<void>;
-        audioUnmute?: () => Promise<void>;
+        toggleAudioMute?: () => void;
+        muteAudio?: () => void;
+        unmuteAudio?: () => void;
       };
-      if (muted) {
-        await call.audioUnmute?.();
+      if (call.toggleAudioMute) {
+        call.toggleAudioMute();
+      } else if (muted) {
+        call.unmuteAudio?.();
       } else {
-        await call.audioMute?.();
+        call.muteAudio?.();
       }
       setMuted(!muted);
     } catch (err) {
@@ -195,13 +196,16 @@ export default function Softphone({ token, onCallStarted, onCallEnded }: Softpho
     if (!callRef.current) return;
     try {
       const call = callRef.current as {
-        deaf?: () => Promise<void>;
-        undeaf?: () => Promise<void>;
+        toggleDeaf?: () => void;
+        deaf?: () => void;
+        undeaf?: () => void;
       };
-      if (deafened) {
-        await call.undeaf?.();
+      if (call.toggleDeaf) {
+        call.toggleDeaf();
+      } else if (deafened) {
+        call.undeaf?.();
       } else {
-        await call.deaf?.();
+        call.deaf?.();
       }
       setDeafened(!deafened);
     } catch (err) {
