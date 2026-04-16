@@ -53,5 +53,8 @@ npx esbuild .open-next/worker.js \
 # (our banner above already handles the polyfill)
 sed -i 's/import"node:process";//g' .open-next/assets/_worker.js/index.js
 
+# CF Pages directory mode needs package.json with type:module for ESM workers
+echo '{"type":"module","main":"index.js"}' > .open-next/assets/_worker.js/package.json
+
 echo "=== Bundled _worker.js/index.js size ==="
 wc -c < .open-next/assets/_worker.js/index.js
