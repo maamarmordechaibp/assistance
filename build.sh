@@ -5,11 +5,12 @@ set -e
 npm install --legacy-peer-deps
 npx @opennextjs/cloudflare build
 
-# Bundle worker.js + all its dependencies into a single self-contained _worker.js
+# Bundle worker.js + all its dependencies into a single self-contained file
 # This resolves the 8 relative imports, tree-shakes unused code, and minifies
+mkdir -p .open-next/assets/_worker.js
 npx esbuild .open-next/worker.js \
   --bundle \
-  --outfile=.open-next/assets/_worker.js \
+  --outfile=.open-next/assets/_worker.js/index.js \
   --format=esm \
   --target=es2022 \
   --minify \
@@ -45,5 +46,5 @@ npx esbuild .open-next/worker.js \
   --external:zlib \
   --log-level=info
 
-echo "=== Bundled _worker.js size ==="
-wc -c < .open-next/assets/_worker.js
+echo "=== Bundled _worker.js/index.js size ==="
+wc -c < .open-next/assets/_worker.js/index.js
