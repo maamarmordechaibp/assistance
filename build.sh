@@ -6,14 +6,10 @@ npm install --legacy-peer-deps
 npx @opennextjs/cloudflare build
 
 # Bundle worker.js + all its dependencies into a single self-contained file
-# --platform=node: creates proper createRequire shim for CJS require() calls in ESM output
-#   (--platform=neutral left bare require() calls which crash in ESM Workers runtime)
-# --platform=node also auto-externalizes all node builtins
-# --banner injects process/Buffer polyfills with used bindings (non-strippable)
 mkdir -p .open-next/assets/_worker.js
 npx esbuild .open-next/worker.js \
   --bundle \
-  --outfile=.open-next/assets/_worker.js/index.js \
+  --outfile=.open-next/assets/_worker.js/original.js \
   --format=esm \
   --target=es2022 \
   --minify \
@@ -23,9 +19,37 @@ npx esbuild .open-next/worker.js \
   --external:cloudflare:* \
   --log-level=info
 
-# Also remove the bare import"node:process" that CF's esbuild would strip
-# (our banner above already handles the polyfill)
-sed -i 's/import"node:process";//g' .open-next/assets/_worker.js/index.js
+# Remove bare import"node:process" that CF esbuild strips
+sed -i 's/import"node:process";//g' .open-next/assets/_worker.js/original.js
+
+# Create debug wrapper that catches and displays the actual error
+cat > .open-next/assets/_worker.js/index.js << 'DEBUGWRAP'
+let mod, initError;
+try {
+  mod = await import("./original.js");
+} catch (e) {
+  initError = e;
+}
+export default {
+  async fetch(req, env, ctx) {
+    if (initError) {
+      return new Response(
+        "WORKER INIT ERROR:\n" + initError.stack + "\n\nmessage: " + initError.message,
+        { status: 500, headers: { "content-type": "text/plain" } }
+      );
+    }
+    try {
+      const handler = mod.default || mod;
+      return await handler.fetch(req, env, ctx);
+    } catch (e) {
+      return new Response(
+        "WORKER RUNTIME ERROR:\n" + e.stack + "\n\nmessage: " + e.message,
+        { status: 500, headers: { "content-type": "text/plain" } }
+      );
+    }
+  }
+};
+DEBUGWRAP
 
 # CF Pages directory mode needs package.json with type:module for ESM workers
 echo '{"type":"module","main":"index.js"}' > .open-next/assets/_worker.js/package.json
