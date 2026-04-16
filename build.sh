@@ -5,15 +5,19 @@ set -e
 npm install --legacy-peer-deps
 npx @opennextjs/cloudflare build
 
-# Copy worker dependencies to assets/ so CF Pages esbuild can resolve imports
-for dir in cloudflare middleware .build server-functions cache cloudflare-templates dynamodb-provider; do
-  if [ -d ".open-next/$dir" ]; then
-    cp -r ".open-next/$dir" ".open-next/assets/"
-  fi
-done
+# Bundle worker.js + all its dependencies into a single self-contained _worker.js
+# This resolves the 8 relative imports, tree-shakes unused code, and minifies
+npx esbuild .open-next/worker.js \
+  --bundle \
+  --outfile=.open-next/assets/_worker.js \
+  --format=esm \
+  --target=es2022 \
+  --minify \
+  --platform=neutral \
+  --conditions=workerd,worker,browser \
+  --external:node:* \
+  --external:cloudflare:* \
+  --log-level=info
 
-# Copy worker as single file (CF Pages will esbuild-bundle it, tree-shaking + gzip)
-cp .open-next/worker.js .open-next/assets/_worker.js
-
-echo "=== assets directory ==="
-ls -la .open-next/assets/
+echo "=== Bundled _worker.js size ==="
+wc -c < .open-next/assets/_worker.js
