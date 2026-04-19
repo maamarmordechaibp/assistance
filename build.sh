@@ -6,10 +6,11 @@ npm install --legacy-peer-deps
 npx @opennextjs/cloudflare build
 
 # --- Require polyfill for CF Workers ---
-# esbuild --platform=neutral wraps unconvertible require() calls in an IIFE that
-# checks `typeof require`. By defining globalThis.require BEFORE the IIFE runs,
-# it returns our function instead of the throwing stub.
-cat > /tmp/cf-require-polyfill.js << 'POLYFILL'
+# OpenNext's internal esbuild creates a __require IIFE that checks typeof require.
+# By defining globalThis.require BEFORE the IIFE runs, it uses our function.
+# We do NOT re-bundle with our own esbuild (which broke middleware module loading).
+# Instead, we prepend a polyfill to OpenNext's worker.js output directly.
+cat > /tmp/cf-require-polyfill.mjs << 'POLYFILL'
 import * as __n0 from "node:async_hooks";
 import * as __n1 from "node:assert";
 import * as __n2 from "node:buffer";
@@ -38,58 +39,63 @@ import * as __n24 from "node:util";
 import * as __n25 from "node:vm";
 import * as __n26 from "node:worker_threads";
 import * as __n27 from "node:zlib";
+import * as __n28 from "node:stream/web";
+import * as __n29 from "node:stream/promises";
+import * as __n30 from "node:fs/promises";
+import * as __n31 from "node:path/posix";
+import * as __n32 from "node:path/win32";
+import * as __n33 from "node:util/types";
+import * as __n34 from "node:dns/promises";
 globalThis.process = globalThis.process || __n17;
 globalThis.Buffer = globalThis.Buffer || __n2.Buffer;
-globalThis.require = function(id) { var m = {"node:async_hooks":__n0,"async_hooks":__n0,"node:assert":__n1,"assert":__n1,"node:buffer":__n2,"buffer":__n2,"node:child_process":__n3,"child_process":__n3,"node:crypto":__n4,"crypto":__n4,"node:diagnostics_channel":__n5,"diagnostics_channel":__n5,"node:dns":__n6,"dns":__n6,"node:events":__n7,"events":__n7,"node:fs":__n8,"fs":__n8,"node:http":__n9,"http":__n9,"node:http2":__n10,"http2":__n10,"node:https":__n11,"https":__n11,"node:module":__n12,"module":__n12,"node:net":__n13,"net":__n13,"node:os":__n14,"os":__n14,"node:path":__n15,"path":__n15,"node:perf_hooks":__n16,"perf_hooks":__n16,"node:process":__n17,"process":__n17,"node:querystring":__n18,"querystring":__n18,"node:stream":__n19,"stream":__n19,"node:string_decoder":__n20,"string_decoder":__n20,"node:tls":__n21,"tls":__n21,"node:tty":__n22,"tty":__n22,"node:url":__n23,"url":__n23,"node:util":__n24,"util":__n24,"node:vm":__n25,"vm":__n25,"node:worker_threads":__n26,"worker_threads":__n26,"node:zlib":__n27,"zlib":__n27}; if(m[id])return m[id]; throw new Error("Cannot find module: "+id); };
+globalThis.require = function(id) {
+  var m = {
+    "node:async_hooks":__n0,"async_hooks":__n0,
+    "node:assert":__n1,"assert":__n1,
+    "node:buffer":__n2,"buffer":__n2,
+    "node:child_process":__n3,"child_process":__n3,
+    "node:crypto":__n4,"crypto":__n4,
+    "node:diagnostics_channel":__n5,"diagnostics_channel":__n5,
+    "node:dns":__n6,"dns":__n6,
+    "node:events":__n7,"events":__n7,
+    "node:fs":__n8,"fs":__n8,
+    "node:http":__n9,"http":__n9,
+    "node:http2":__n10,"http2":__n10,
+    "node:https":__n11,"https":__n11,
+    "node:module":__n12,"module":__n12,
+    "node:net":__n13,"net":__n13,
+    "node:os":__n14,"os":__n14,
+    "node:path":__n15,"path":__n15,
+    "node:perf_hooks":__n16,"perf_hooks":__n16,
+    "node:process":__n17,"process":__n17,
+    "node:querystring":__n18,"querystring":__n18,
+    "node:stream":__n19,"stream":__n19,
+    "node:string_decoder":__n20,"string_decoder":__n20,
+    "node:tls":__n21,"tls":__n21,
+    "node:tty":__n22,"tty":__n22,
+    "node:url":__n23,"url":__n23,
+    "node:util":__n24,"util":__n24,
+    "node:vm":__n25,"vm":__n25,
+    "node:worker_threads":__n26,"worker_threads":__n26,
+    "node:zlib":__n27,"zlib":__n27,
+    "node:stream/web":__n28,"stream/web":__n28,
+    "node:stream/promises":__n29,"stream/promises":__n29,
+    "node:fs/promises":__n30,"fs/promises":__n30,
+    "node:path/posix":__n31,"path/posix":__n31,
+    "node:path/win32":__n32,"path/win32":__n32,
+    "node:util/types":__n33,"util/types":__n33,
+    "node:dns/promises":__n34,"dns/promises":__n34
+  };
+  if(m[id]) return m[id];
+  throw new Error("Cannot find module: "+id);
+};
 POLYFILL
 
 mkdir -p .open-next/assets/_worker.js
 
-# Bundle worker.js with esbuild
-# --alias rewrites bare builtin imports to node: prefix before bundling
-# --external:node:* externalizes all node:-prefixed imports
-npx esbuild .open-next/worker.js \
-  --bundle \
-  --outfile=/tmp/worker-bundled.js \
-  --format=esm \
-  --target=es2022 \
-  --minify \
-  --platform=neutral \
-  --conditions=workerd,worker,browser \
-  --external:node:* \
-  --external:cloudflare:* \
-  --alias:async_hooks=node:async_hooks \
-  --alias:assert=node:assert \
-  --alias:buffer=node:buffer \
-  --alias:child_process=node:child_process \
-  --alias:crypto=node:crypto \
-  --alias:diagnostics_channel=node:diagnostics_channel \
-  --alias:dns=node:dns \
-  --alias:events=node:events \
-  --alias:fs=node:fs \
-  --alias:http=node:http \
-  --alias:http2=node:http2 \
-  --alias:https=node:https \
-  --alias:module=node:module \
-  --alias:net=node:net \
-  --alias:os=node:os \
-  --alias:path=node:path \
-  --alias:perf_hooks=node:perf_hooks \
-  --alias:process=node:process \
-  --alias:querystring=node:querystring \
-  --alias:stream=node:stream \
-  --alias:string_decoder=node:string_decoder \
-  --alias:tls=node:tls \
-  --alias:tty=node:tty \
-  --alias:url=node:url \
-  --alias:util=node:util \
-  --alias:vm=node:vm \
-  --alias:worker_threads=node:worker_threads \
-  --alias:zlib=node:zlib \
-  --log-level=info
-
-# Prepend polyfill (provides globalThis.require backed by ESM imports)
-cat /tmp/cf-require-polyfill.js /tmp/worker-bundled.js > .open-next/assets/_worker.js/original.js
+# Use OpenNext's worker.js directly (preserves middleware module loading)
+# Just prepend our require polyfill
+cat /tmp/cf-require-polyfill.mjs .open-next/worker.js > .open-next/assets/_worker.js/original.js
 
 # Debug wrapper that catches errors + captures console.error for OpenNext's internal error logging
 cat > .open-next/assets/_worker.js/index.js << 'DEBUGWRAP'
