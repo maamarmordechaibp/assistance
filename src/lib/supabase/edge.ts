@@ -59,5 +59,12 @@ export async function edgeFn(
     headers.set('Content-Type', 'application/json');
   }
 
-  return fetch(url, { ...fetchOptions, headers });
+  const response = await fetch(url, { ...fetchOptions, headers });
+
+  // If unauthorized, the session has expired — redirect to login
+  if (response.status === 401 && typeof window !== 'undefined') {
+    window.location.href = '/login';
+  }
+
+  return response;
 }
