@@ -62,7 +62,8 @@ export async function edgeFn(
   const response = await fetch(url, { ...fetchOptions, headers });
 
   // If unauthorized, the session has expired — redirect to login
-  if (response.status === 401 && typeof window !== 'undefined') {
+  // Only redirect if not already on the login page to prevent loops
+  if (response.status === 401 && typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
     window.location.href = '/login';
   }
 
