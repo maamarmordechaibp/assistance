@@ -86,6 +86,8 @@ export default function RepDashboard() {
     async function init() {
       try {
         const res = await edgeFn('reps-me');
+        // If unauthorized, edgeFn handles signout+redirect — stop here
+        if (res.status === 401) return;
         if (res.ok) {
           const data = await res.json();
           setRepStatus(data.rep?.status || 'offline');
@@ -96,6 +98,7 @@ export default function RepDashboard() {
 
         // Load settings for call extensions
         const settingsRes = await edgeFn('settings');
+        if (settingsRes.status === 401) return;
         if (settingsRes.ok) {
           const settingsData = await settingsRes.json();
           const settingsList = settingsData.settings || [];

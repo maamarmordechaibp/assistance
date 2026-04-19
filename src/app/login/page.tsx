@@ -18,7 +18,7 @@ export default function LoginPage() {
 
     try {
       const supabase = createClient();
-      const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
+      const { data, error: authError } = await supabase.auth.signInWithPassword({ email, password });
 
       if (authError) {
         setError(authError.message);
@@ -26,6 +26,9 @@ export default function LoginPage() {
         return;
       }
 
+      // Navigate explicitly based on the user's role
+      const role = data.user?.app_metadata?.role;
+      router.push(role === 'admin' ? '/admin' : '/rep');
       router.refresh();
     } catch {
       setError('Network error');
