@@ -91,14 +91,33 @@ npx esbuild .open-next/worker.js \
 # Prepend polyfill (provides globalThis.require backed by ESM imports)
 cat /tmp/cf-require-polyfill.js /tmp/worker-bundled.js > .open-next/assets/_worker.js/original.js
 
-# Debug wrapper that catches and displays init/runtime errors
+# Debug wrapper that catches and displays init/runtime errors + intercepts 500 responses
 cat > .open-next/assets/_worker.js/index.js << 'DEBUGWRAP'
 let mod, initError;
 try { mod = await import("./original.js"); } catch(e) { initError = e; }
 export default {
   async fetch(req, env, ctx) {
+    const url = new URL(req.url);
+    if (url.pathname === "/__debug") {
+      const info = {
+        initError: initError ? initError.stack : null,
+        envKeys: Object.keys(env || {}),
+        processEnvKeys: Object.keys(globalThis.process?.env || {}),
+        hasRequire: typeof globalThis.require,
+        modKeys: mod ? Object.keys(mod.default || mod) : null,
+        modType: mod ? typeof (mod.default || mod).fetch : null,
+      };
+      return new Response(JSON.stringify(info, null, 2), {status:200,headers:{"content-type":"application/json"}});
+    }
     if (initError) return new Response("WORKER INIT ERROR:\n"+initError.stack+"\n\nmessage: "+initError.message, {status:500,headers:{"content-type":"text/plain"}});
-    try { return await (mod.default||mod).fetch(req, env, ctx); }
+    try {
+      const resp = await (mod.default||mod).fetch(req, env, ctx);
+      if (resp.status >= 500) {
+        const body = await resp.text();
+        return new Response("WORKER 5xx RESPONSE (status="+resp.status+"):\nURL: "+req.url+"\nBody: "+body+"\nHeaders: "+JSON.stringify(Object.fromEntries(resp.headers)), {status:resp.status,headers:{"content-type":"text/plain"}});
+      }
+      return resp;
+    }
     catch(e) { return new Response("WORKER RUNTIME ERROR:\n"+e.stack+"\n\nmessage: "+e.message, {status:500,headers:{"content-type":"text/plain"}}); }
   }
 };
