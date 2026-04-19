@@ -1,9 +1,36 @@
 #!/bin/sh
 set -e
 
-# Install deps and run OpenNext build
+# Install deps (including @opennextjs/cloudflare devDep) and build
 npm install --legacy-peer-deps
-npx @opennextjs/cloudflare build
+npx opennextjs-cloudflare build
+
+# Check what OpenNext produced
+echo "=== OpenNext output structure ==="
+ls -la .open-next/ 2>/dev/null || true
+ls -la .open-next/assets/_worker.js/ 2>/dev/null || true
+
+# If OpenNext created the worker correctly, we just need to prepend the require polyfill.
+# The defineCloudflareConfig() adapter handles CF module resolution (cloudflare:*).
+WORKER_FILE=""
+if [ -f ".open-next/assets/_worker.js/index.js" ]; then
+  WORKER_FILE=".open-next/assets/_worker.js/index.js"
+elif [ -f ".open-next/assets/_worker.js" ]; then
+  WORKER_FILE=".open-next/assets/_worker.js"
+elif [ -f ".open-next/worker.js" ]; then
+  # Adapter didn't place worker in assets/_worker.js, do it manually
+  mkdir -p .open-next/assets/_worker.js
+  WORKER_FILE=".open-next/assets/_worker.js/index.js"
+  cp .open-next/worker.js "$WORKER_FILE"
+fi
+
+echo "=== Worker file: $WORKER_FILE ==="
+
+if [ -z "$WORKER_FILE" ]; then
+  echo "ERROR: No worker file found!"
+  ls -laR .open-next/
+  exit 1
+fi
 
 # --- Require polyfill for CF Workers ---
 # OpenNext's internal esbuild creates a __require IIFE that checks typeof require.
@@ -93,11 +120,13 @@ POLYFILL
 
 mkdir -p .open-next/assets/_worker.js
 
-# Use OpenNext's worker.js directly (preserves middleware module loading)
-# Just prepend our require polyfill
-cat /tmp/cf-require-polyfill.mjs .open-next/worker.js > .open-next/assets/_worker.js/original.js
+# Prepend require polyfill to the worker file
+# This provides globalThis.require backed by ESM imports for Node.js builtins
+# needed because OpenNext's esbuild creates __require IIFE that checks typeof require
+mv "$WORKER_FILE" /tmp/worker-original.js
+cat /tmp/cf-require-polyfill.mjs /tmp/worker-original.js > .open-next/assets/_worker.js/original.js
 
-# Debug wrapper that catches errors + captures console.error for OpenNext's internal error logging
+# Debug wrapper that catches errors + captures console.error
 cat > .open-next/assets/_worker.js/index.js << 'DEBUGWRAP'
 let mod, initError;
 const _errors = [];
