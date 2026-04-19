@@ -31,7 +31,8 @@ serve(async (req) => {
     }
 
     const signalwireProjectId = Deno.env.get('SIGNALWIRE_PROJECT_ID') || null;
-    return new Response(JSON.stringify({ rep, webrtcToken, signalwireProjectId }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    const signalwireSpaceUrl = Deno.env.get('SIGNALWIRE_SPACE_URL') || null;
+    return new Response(JSON.stringify({ rep, webrtcToken, signalwireProjectId, signalwireSpaceUrl }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 
   if (req.method === 'PATCH') {
