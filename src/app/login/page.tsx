@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 
 export default function LoginPage() {
@@ -9,7 +8,6 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const router = useRouter();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,10 +24,9 @@ export default function LoginPage() {
         return;
       }
 
-      // Navigate explicitly based on the user's role
+      // Hard navigation so the full page load picks up fresh cookies
       const role = data.user?.app_metadata?.role;
-      router.push(role === 'admin' ? '/admin' : '/rep');
-      router.refresh();
+      window.location.href = role === 'admin' ? '/admin' : '/rep';
     } catch {
       setError('Network error');
       setLoading(false);

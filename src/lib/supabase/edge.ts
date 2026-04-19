@@ -5,9 +5,6 @@ import { createClient } from './client';
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
-// Module-level flag to prevent multiple simultaneous auth redirects
-let redirecting = false;
-
 async function getAccessToken(): Promise<string | null> {
   const supabase = createClient();
 
@@ -53,21 +50,6 @@ export async function edgeFn(
   }
 
   const response = await fetch(url, { ...fetchOptions, headers });
-
-  // If unauthorized and not already redirecting, sign out (clear stale cookies)
-  // then redirect to login. Without signOut the middleware would see the old
-  // cookie, think the user is logged in, and bounce right back → infinite loop.
-  if (
-    response.status === 401 &&
-    typeof window !== 'undefined' &&
-    !redirecting &&
-    !window.location.pathname.startsWith('/login')
-  ) {
-    redirecting = true;
-    const supabase = createClient();
-    await supabase.auth.signOut();
-    window.location.href = '/login';
-  }
 
   return response;
 }
