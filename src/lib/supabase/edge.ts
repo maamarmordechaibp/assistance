@@ -5,10 +5,35 @@ import { createClient } from './client';
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
+// Fallback: read access_token directly from auth cookies
+function getTokenFromCookies(): string | null {
+  if (typeof document === 'undefined') return null;
+  const cookies = document.cookie.split(';').map(c => c.trim());
+  const chunks: { name: string; value: string }[] = [];
+  for (const cookie of cookies) {
+    const eqIdx = cookie.indexOf('=');
+    if (eqIdx === -1) continue;
+    const name = cookie.substring(0, eqIdx);
+    const value = cookie.substring(eqIdx + 1);
+    if (name.startsWith('sb-') && name.includes('-auth-token')) {
+      chunks.push({ name, value: decodeURIComponent(value) });
+    }
+  }
+  if (chunks.length === 0) return null;
+  chunks.sort((a, b) => a.name.localeCompare(b.name));
+  const combined = chunks.map(c => c.value).join('');
+  try {
+    const session = JSON.parse(combined);
+    return session?.access_token ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function getAccessToken(): Promise<string | null> {
   const supabase = createClient();
 
-  // First try getSession — fast, from memory
+  // Try Supabase client first
   const { data: { session } } = await supabase.auth.getSession();
   if (session?.access_token) {
     const expiresAt = session.expires_at ?? 0;
@@ -18,12 +43,18 @@ async function getAccessToken(): Promise<string | null> {
     }
   }
 
-  // Token missing or about to expire — force a refresh via getUser()
+  // Supabase client didn't return a session — try refreshing
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return null;
+  if (user) {
+    const { data: { session: refreshed } } = await supabase.auth.getSession();
+    if (refreshed?.access_token) return refreshed.access_token;
+  }
 
-  const { data: { session: refreshed } } = await supabase.auth.getSession();
-  return refreshed?.access_token ?? null;
+  // Last resort: read directly from cookies
+  const cookieToken = getTokenFromCookies();
+  console.log('[edgeFn] token source:', session ? 'session' : user ? 'refresh' : cookieToken ? 'cookie-fallback' : 'NONE',
+    '| cookies:', typeof document !== 'undefined' ? document.cookie.split(';').filter(c => c.includes('auth')).length : 0);
+  return cookieToken;
 }
 
 export async function edgeFn(
