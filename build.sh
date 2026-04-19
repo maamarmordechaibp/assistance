@@ -91,9 +91,12 @@ npx esbuild .open-next/worker.js \
 # Prepend polyfill (provides globalThis.require backed by ESM imports)
 cat /tmp/cf-require-polyfill.js /tmp/worker-bundled.js > .open-next/assets/_worker.js/original.js
 
-# Debug wrapper that catches and displays init/runtime errors + intercepts 500 responses
+# Debug wrapper that catches errors + captures console.error for OpenNext's internal error logging
 cat > .open-next/assets/_worker.js/index.js << 'DEBUGWRAP'
 let mod, initError;
+const _errors = [];
+const _origErr = console.error;
+console.error = function(...args) { _errors.push(args.map(a => a?.stack||String(a)).join(" ")); _origErr.apply(console, args); };
 try { mod = await import("./original.js"); } catch(e) { initError = e; }
 export default {
   async fetch(req, env, ctx) {
@@ -106,15 +109,17 @@ export default {
         hasRequire: typeof globalThis.require,
         modKeys: mod ? Object.keys(mod.default || mod) : null,
         modType: mod ? typeof (mod.default || mod).fetch : null,
+        capturedErrors: _errors.slice(-20),
       };
       return new Response(JSON.stringify(info, null, 2), {status:200,headers:{"content-type":"application/json"}});
     }
     if (initError) return new Response("WORKER INIT ERROR:\n"+initError.stack+"\n\nmessage: "+initError.message, {status:500,headers:{"content-type":"text/plain"}});
+    _errors.length = 0;
     try {
       const resp = await (mod.default||mod).fetch(req, env, ctx);
       if (resp.status >= 500) {
         const body = await resp.text();
-        return new Response("WORKER 5xx RESPONSE (status="+resp.status+"):\nURL: "+req.url+"\nBody: "+body+"\nHeaders: "+JSON.stringify(Object.fromEntries(resp.headers)), {status:resp.status,headers:{"content-type":"text/plain"}});
+        return new Response("WORKER 5xx (status="+resp.status+"):\nURL: "+req.url+"\nBody: "+body+"\n\nCaptured console.error:\n"+_errors.join("\n---\n")+"\n\nHeaders: "+JSON.stringify(Object.fromEntries(resp.headers)), {status:resp.status,headers:{"content-type":"text/plain"}});
       }
       return resp;
     }
