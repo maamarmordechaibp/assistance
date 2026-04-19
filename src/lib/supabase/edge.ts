@@ -5,18 +5,15 @@ import { createClient } from './client';
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
-/**
- * Get a valid access token from the Supabase client.
- * getSession() reads from memory/cookies and may return an expired token.
- * getUser() forces a round-trip to GoTrue which refreshes the token if needed.
- */
+// Module-level flag to prevent multiple simultaneous auth redirects
+let redirecting = false;
+
 async function getAccessToken(): Promise<string | null> {
   const supabase = createClient();
 
   // First try getSession — fast, from memory
   const { data: { session } } = await supabase.auth.getSession();
   if (session?.access_token) {
-    // Check if token expires in the next 60 seconds
     const expiresAt = session.expires_at ?? 0;
     const nowSecs = Math.floor(Date.now() / 1000);
     if (expiresAt > nowSecs + 60) {
@@ -28,14 +25,10 @@ async function getAccessToken(): Promise<string | null> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
 
-  // After getUser refreshes the token, getSession should have the new one
   const { data: { session: refreshed } } = await supabase.auth.getSession();
   return refreshed?.access_token ?? null;
 }
 
-/**
- * Call a Supabase Edge Function with the current user's auth token.
- */
 export async function edgeFn(
   functionName: string,
   options: RequestInit & { params?: Record<string, string> } = {}
@@ -61,9 +54,18 @@ export async function edgeFn(
 
   const response = await fetch(url, { ...fetchOptions, headers });
 
-  // If unauthorized, the session has expired — redirect to login
-  // Only redirect if not already on the login page to prevent loops
-  if (response.status === 401 && typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+  // If unauthorized and not already redirecting, sign out (clear stale cookies)
+  // then redirect to login. Without signOut the middleware would see the old
+  // cookie, think the user is logged in, and bounce right back → infinite loop.
+  if (
+    response.status === 401 &&
+    typeof window !== 'undefined' &&
+    !redirecting &&
+    !window.location.pathname.startsWith('/login')
+  ) {
+    redirecting = true;
+    const supabase = createClient();
+    await supabase.auth.signOut();
     window.location.href = '/login';
   }
 
