@@ -80,12 +80,12 @@ export async function createWebRtcToken(identity: string) {
   const spaceUrl = getSpaceUrl();
   const auth = getAuthHeader();
 
-  // Issue a Relay REST JWT — the WebRTC.Client (v2) registers as a VERTO client
-  // which is what LaML <Dial><Client> can reach.
-  const res = await fetch(`https://${spaceUrl}/api/relay/rest/jwt`, {
+  // Issue a Call Fabric Subscriber Access Token (SAT) for @signalwire/js v3.
+  // The subscriber reference must match the LaML <Dial><Client> identity.
+  const res = await fetch(`https://${spaceUrl}/api/fabric/subscribers/tokens`, {
     method: 'POST',
     headers: { Authorization: auth, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ expires_in: 3600, resource }),
+    body: JSON.stringify({ reference: resource, channels: { audio: true, video: false, messaging: false } }),
   });
   return res.json();
 }

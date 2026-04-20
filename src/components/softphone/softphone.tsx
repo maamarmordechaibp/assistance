@@ -45,92 +45,50 @@ export default function Softphone({ token, projectId, host, onCallStarted, onCal
 
     async function initClient() {
       try {
-        // @signalwire/js v3 uses the SignalWire() factory function
         const SW = await import('@signalwire/js');
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const SignalWireFn = (SW as any).SignalWire || (SW as any).default?.SignalWire;
+        if (!SignalWireFn) throw new Error('SignalWire() not found in @signalwire/js');
 
-        // Fallback: try the legacy WebRTC.Client API if SignalWire() doesn't exist
+        // v3 Call Fabric client — token must be a Subscriber Access Token (SAT)
+        const client = await SignalWireFn({ host, token });
+        if (cancelled) { client.disconnect?.(); return; }
+        clientInstance = client;
+
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const WebRTCClient = (SW as any).WebRTC?.Client;
-
-        if (SignalWireFn) {
-          // v3 API: SignalWire({ host, token })
-          const client = await SignalWireFn({ host, token });
-          if (cancelled) { client.disconnect?.(); return; }
-          clientInstance = client;
-
-          // Register for incoming calls
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const handleCallReceived = async (call: any) => {
-            if (cancelled) return;
-            callRef.current = call;
-            setCallerNumber(call.from || call.headers?.['X-CallerNumber'] || 'Unknown');
-            setCallState('ringing');
-
-            // Listen for call state changes
-            call.on?.('call.state', (state: string) => {
-              if (cancelled) return;
-              if (state === 'active' || state === 'answering') {
-                setCallState('active');
-                onCallStarted?.(call.id, call.from || 'Unknown');
-              } else if (state === 'ending' || state === 'hangup' || state === 'destroy') {
-                callRef.current = null;
-                setCallState('idle');
-                setCallerNumber('');
-                setMuted(false);
-                setDeafened(false);
-                onCallEnded?.();
-              }
-            });
-          };
-
-          client.on?.('call.received', handleCallReceived);
-
-          // Also try the online() registration if available
-          if (typeof client.online === 'function') {
-            await client.online({
-              incomingCallHandlers: { all: handleCallReceived },
-            });
-          }
-
-          setError(null);
-          console.log('SignalWire v3 client connected, ready for calls');
-        } else if (WebRTCClient && projectId) {
-          // Legacy v2 API fallback: new WebRTC.Client({ project, token })
-          const client = new WebRTCClient({ project: projectId, token });
+        const handleCallReceived = async (call: any) => {
           if (cancelled) return;
-          clientInstance = client;
+          callRef.current = call;
+          setCallerNumber(call.from || call.headers?.['X-CallerNumber'] || 'Unknown');
+          setCallState('ringing');
 
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          client.on('signalwire.notification', (notification: any) => {
+          call.on?.('call.state', (state: string) => {
             if (cancelled) return;
-            if (notification.type === 'callUpdate') {
-              const call = notification.call;
-              if (call.state === 'ringing' && call.direction === 'inbound') {
-                callRef.current = call;
-                setCallerNumber(call.from || 'Unknown');
-                setCallState('ringing');
-              } else if (call.state === 'active') {
-                setCallState('active');
-                onCallStarted?.(call.id, call.from || 'Unknown');
-              } else if (call.state === 'hangup' || call.state === 'destroy') {
-                callRef.current = null;
-                setCallState('idle');
-                setCallerNumber('');
-                setMuted(false);
-                setDeafened(false);
-                onCallEnded?.();
-              }
+            if (state === 'active' || state === 'answering') {
+              setCallState('active');
+              onCallStarted?.(call.id, call.from || 'Unknown');
+            } else if (state === 'ending' || state === 'hangup' || state === 'destroy') {
+              callRef.current = null;
+              setCallState('idle');
+              setCallerNumber('');
+              setMuted(false);
+              setDeafened(false);
+              onCallEnded?.();
             }
           });
+        };
 
-          await client.connect();
-          setError(null);
-          console.log('SignalWire WebRTC.Client (legacy) connected, ready for calls');
-        } else {
-          throw new Error('No compatible SignalWire API found');
+        client.on?.('call.received', handleCallReceived);
+
+        // Go online to be addressable for incoming calls
+        if (typeof client.online === 'function') {
+          await client.online({
+            incomingCallHandlers: { all: handleCallReceived },
+          });
         }
+
+        setError(null);
+        console.log('SignalWire Call Fabric client connected, ready for calls');
 
         clientRef.current = clientInstance;
       } catch (err) {
