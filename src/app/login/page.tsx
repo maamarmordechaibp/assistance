@@ -24,6 +24,11 @@ export default function LoginPage() {
         return;
       }
 
+      // Store session as backup for edge function calls
+      if (data.session) {
+        try { sessionStorage.setItem('sb-session', JSON.stringify(data.session)); } catch {}
+      }
+
       // Hard navigation so the full page load picks up fresh cookies
       const role = data.user?.app_metadata?.role;
       window.location.href = role === 'admin' ? '/admin' : '/rep';

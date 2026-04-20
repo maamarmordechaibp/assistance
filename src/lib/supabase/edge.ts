@@ -5,56 +5,38 @@ import { createClient } from './client';
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
-// Fallback: read access_token directly from auth cookies
-function getTokenFromCookies(): string | null {
-  if (typeof document === 'undefined') return null;
-  const cookies = document.cookie.split(';').map(c => c.trim());
-  const chunks: { name: string; value: string }[] = [];
-  for (const cookie of cookies) {
-    const eqIdx = cookie.indexOf('=');
-    if (eqIdx === -1) continue;
-    const name = cookie.substring(0, eqIdx);
-    const value = cookie.substring(eqIdx + 1);
-    if (name.startsWith('sb-') && name.includes('-auth-token')) {
-      chunks.push({ name, value: decodeURIComponent(value) });
-    }
-  }
-  if (chunks.length === 0) return null;
-  chunks.sort((a, b) => a.name.localeCompare(b.name));
-  const combined = chunks.map(c => c.value).join('');
-  try {
-    const session = JSON.parse(combined);
-    return session?.access_token ?? null;
-  } catch {
-    return null;
-  }
-}
-
 async function getAccessToken(): Promise<string | null> {
   const supabase = createClient();
 
-  // Try Supabase client first
+  // 1. Try Supabase client's getSession (reads from cookies)
   const { data: { session } } = await supabase.auth.getSession();
-  if (session?.access_token) {
-    const expiresAt = session.expires_at ?? 0;
-    const nowSecs = Math.floor(Date.now() / 1000);
-    if (expiresAt > nowSecs + 60) {
-      return session.access_token;
-    }
+  if (session?.access_token) return session.access_token;
+
+  // 2. Try refreshing the session
+  const { data: { session: refreshed } } = await supabase.auth.refreshSession();
+  if (refreshed?.access_token) return refreshed.access_token;
+
+  // 3. Fallback: restore from sessionStorage (set during login)
+  if (typeof sessionStorage !== 'undefined') {
+    try {
+      const stored = sessionStorage.getItem('sb-session');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed.access_token && parsed.refresh_token) {
+          // Restore the session into the Supabase client
+          const { data } = await supabase.auth.setSession({
+            access_token: parsed.access_token,
+            refresh_token: parsed.refresh_token,
+          });
+          if (data.session?.access_token) {
+            return data.session.access_token;
+          }
+        }
+      }
+    } catch {}
   }
 
-  // Supabase client didn't return a session — try refreshing
-  const { data: { user } } = await supabase.auth.getUser();
-  if (user) {
-    const { data: { session: refreshed } } = await supabase.auth.getSession();
-    if (refreshed?.access_token) return refreshed.access_token;
-  }
-
-  // Last resort: read directly from cookies
-  const cookieToken = getTokenFromCookies();
-  console.log('[edgeFn] token source:', session ? 'session' : user ? 'refresh' : cookieToken ? 'cookie-fallback' : 'NONE',
-    '| cookies:', typeof document !== 'undefined' ? document.cookie.split(';').filter(c => c.includes('auth')).length : 0);
-  return cookieToken;
+  return null;
 }
 
 export async function edgeFn(

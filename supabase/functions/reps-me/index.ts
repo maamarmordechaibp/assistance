@@ -8,11 +8,7 @@ serve(async (req) => {
   const cors = handleCors(req);
   if (cors) return cors;
 
-  const authHeader = req.headers.get('Authorization');
-  console.log('reps-me auth header present:', !!authHeader, 'length:', authHeader?.length ?? 0);
-  
   const user = await getUser(req);
-  console.log('reps-me getUser result:', user ? user.email : 'null');
   if (!user) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
