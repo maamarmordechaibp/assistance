@@ -14,12 +14,12 @@ import {
 } from 'lucide-react';
 
 /* The SignalWire JS v1 (legacy) bundle is loaded via CDN as a <script>.
-   It exports Relay, Verto, CantinaAuth onto window. We use the Verto
-   class which registers as a VERTO client — the protocol that LaML
-   <Dial><Client> rings. */
+   It exports Relay, Verto, CantinaAuth onto window. We use the Relay
+   class which auto-connects to relay.signalwire.com — the endpoint
+   that LaML <Dial><Client> routes calls through. */
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-declare global { interface Window { Verto: any; } }
+declare global { interface Window { Relay: any; } }
 
 const SW_CDN_URL = 'https://unpkg.com/@signalwire/js@1.5.1-rc.5/dist/index.min.js';
 
@@ -47,10 +47,10 @@ export default function Softphone({ token, projectId, host, onCallStarted, onCal
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Initialize SignalWire Verto client for incoming calls via <Dial><Client>
+  // Initialize SignalWire Relay client for incoming calls via <Dial><Client>
   useEffect(() => {
-    if (!token || typeof token !== 'string' || !host || !projectId || !sdkReady) return;
-    if (!window.Verto) { setError('SignalWire SDK not loaded'); return; }
+    if (!token || typeof token !== 'string' || !projectId || !sdkReady) return;
+    if (!window.Relay) { setError('SignalWire SDK not loaded'); return; }
 
     let cancelled = false;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -58,12 +58,12 @@ export default function Softphone({ token, projectId, host, onCallStarted, onCal
 
     async function initClient() {
       try {
-        // Verto client connects via VERTO protocol — LaML <Dial><Client> rings this
+        // Relay client auto-connects to wss://relay.signalwire.com
+        // and registers the resource identity from the JWT
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const client: any = new window.Verto({
-          host,
-          login: projectId, // project ID is the SIP login
-          passwd: token,    // Relay JWT is the password
+        const client: any = new window.Relay({
+          project: projectId,
+          token,
         });
         if (cancelled) return;
         clientInstance = client;
@@ -95,7 +95,7 @@ export default function Softphone({ token, projectId, host, onCallStarted, onCal
         client.on('signalwire.ready', () => {
           if (cancelled) return;
           setError(null);
-          console.log('SignalWire Verto client connected, ready for calls');
+          console.log('SignalWire Relay client connected, ready for calls');
         });
 
         client.on('signalwire.error', (err: Error) => {
@@ -129,7 +129,7 @@ export default function Softphone({ token, projectId, host, onCallStarted, onCal
         clientRef.current = null;
       }
     };
-  }, [token, projectId, host, sdkReady, onCallStarted, onCallEnded]);
+  }, [token, projectId, sdkReady, onCallStarted, onCallEnded]);
 
   // Timer for active calls
   useEffect(() => {
