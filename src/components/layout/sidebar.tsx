@@ -1,8 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { edgeFn } from '@/lib/supabase/edge';
 import {
   LayoutDashboard,
   Phone,
@@ -48,13 +49,15 @@ const adminLinks = [
 
 export default function Sidebar({ role, userName }: SidebarProps) {
   const pathname = usePathname();
-  const router = useRouter();
   const links = role === 'admin' ? adminLinks : repLinks;
 
   const handleLogout = async () => {
+    try {
+      await edgeFn('reps-me', { method: 'PATCH', body: JSON.stringify({ status: 'offline' }) });
+    } catch {}
     const supabase = createClient();
     await supabase.auth.signOut();
-    router.push('/login');
+    window.location.href = '/login';
   };
 
   return (

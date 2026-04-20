@@ -1,5 +1,6 @@
 'use client';
 
+import Script from 'next/script';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Phone,
@@ -11,6 +12,16 @@ import {
   VolumeX,
   Loader2,
 } from 'lucide-react';
+
+/* The SignalWire JS v1 (legacy) bundle is loaded via CDN as a <script>.
+   It exports Relay, Verto, CantinaAuth onto window. We use the Verto
+   class which registers as a VERTO client — the protocol that LaML
+   <Dial><Client> rings. */
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+declare global { interface Window { Verto: any; } }
+
+const SW_CDN_URL = 'https://unpkg.com/@signalwire/js@1.5.1-rc.5/dist/index.min.js';
 
 interface SoftphoneProps {
   token: string | null;
@@ -29,15 +40,17 @@ export default function Softphone({ token, projectId, host, onCallStarted, onCal
   const [duration, setDuration] = useState(0);
   const [callerNumber, setCallerNumber] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [sdkReady, setSdkReady] = useState(false);
 
   const clientRef = useRef<unknown>(null);
   const callRef = useRef<unknown>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Initialize SignalWire client (v3 API) for incoming calls via <Dial><Client>
+  // Initialize SignalWire Verto client for incoming calls via <Dial><Client>
   useEffect(() => {
-    if (!token || typeof token !== 'string' || !host) return;
+    if (!token || typeof token !== 'string' || !host || !projectId || !sdkReady) return;
+    if (!window.Verto) { setError('SignalWire SDK not loaded'); return; }
 
     let cancelled = false;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -45,29 +58,30 @@ export default function Softphone({ token, projectId, host, onCallStarted, onCal
 
     async function initClient() {
       try {
-        const SW = await import('@signalwire/js');
+        // Verto client connects via VERTO protocol — LaML <Dial><Client> rings this
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const SignalWireFn = (SW as any).SignalWire || (SW as any).default?.SignalWire;
-        if (!SignalWireFn) throw new Error('SignalWire() not found in @signalwire/js');
-
-        // v3 Call Fabric client — token must be a Subscriber Access Token (SAT)
-        const client = await SignalWireFn({ host, token });
-        if (cancelled) { client.disconnect?.(); return; }
+        const client: any = new window.Verto({
+          host,
+          login: projectId, // project ID is the SIP login
+          passwd: token,    // Relay JWT is the password
+        });
+        if (cancelled) return;
         clientInstance = client;
 
+        // Handle call notifications
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const handleCallReceived = async (call: any) => {
+        client.on('signalwire.notification', (notification: any) => {
           if (cancelled) return;
-          callRef.current = call;
-          setCallerNumber(call.from || call.headers?.['X-CallerNumber'] || 'Unknown');
-          setCallState('ringing');
-
-          call.on?.('call.state', (state: string) => {
-            if (cancelled) return;
-            if (state === 'active' || state === 'answering') {
+          if (notification.type === 'callUpdate') {
+            const call = notification.call;
+            if (call.state === 'ringing' && call.direction === 'inbound') {
+              callRef.current = call;
+              setCallerNumber(call.from || 'Unknown');
+              setCallState('ringing');
+            } else if (call.state === 'active') {
               setCallState('active');
               onCallStarted?.(call.id, call.from || 'Unknown');
-            } else if (state === 'ending' || state === 'hangup' || state === 'destroy') {
+            } else if (call.state === 'hangup' || call.state === 'destroy') {
               callRef.current = null;
               setCallState('idle');
               setCallerNumber('');
@@ -75,21 +89,26 @@ export default function Softphone({ token, projectId, host, onCallStarted, onCal
               setDeafened(false);
               onCallEnded?.();
             }
-          });
-        };
+          }
+        });
 
-        client.on?.('call.received', handleCallReceived);
+        client.on('signalwire.ready', () => {
+          if (cancelled) return;
+          setError(null);
+          console.log('SignalWire Verto client connected, ready for calls');
+        });
 
-        // Go online to be addressable for incoming calls
-        if (typeof client.online === 'function') {
-          await client.online({
-            incomingCallHandlers: { all: handleCallReceived },
-          });
-        }
+        client.on('signalwire.error', (err: Error) => {
+          console.error('SignalWire error:', err);
+          if (!cancelled) setError('Phone connection error');
+        });
 
-        setError(null);
-        console.log('SignalWire Call Fabric client connected, ready for calls');
+        client.on('signalwire.socket.close', () => {
+          console.warn('SignalWire socket closed');
+          if (!cancelled) setError('Phone disconnected');
+        });
 
+        await client.connect();
         clientRef.current = clientInstance;
       } catch (err) {
         console.error('SignalWire init error:', err);
@@ -110,7 +129,7 @@ export default function Softphone({ token, projectId, host, onCallStarted, onCal
         clientRef.current = null;
       }
     };
-  }, [token, projectId, host, onCallStarted, onCallEnded]);
+  }, [token, projectId, host, sdkReady, onCallStarted, onCallEnded]);
 
   // Timer for active calls
   useEffect(() => {
@@ -228,14 +247,19 @@ export default function Softphone({ token, projectId, host, onCallStarted, onCal
 
   if (!token) {
     return (
-      <div className="bg-gray-50 rounded-xl border p-4 text-center text-sm text-gray-500">
-        <Phone className="w-6 h-6 mx-auto mb-2 text-gray-300" />
-        Set yourself as Available to enable the softphone.
-      </div>
+      <>
+        <Script src={SW_CDN_URL} strategy="afterInteractive" onLoad={() => setSdkReady(true)} />
+        <div className="bg-gray-50 rounded-xl border p-4 text-center text-sm text-gray-500">
+          <Phone className="w-6 h-6 mx-auto mb-2 text-gray-300" />
+          Set yourself as Available to enable the softphone.
+        </div>
+      </>
     );
   }
 
   return (
+    <>
+      <Script src={SW_CDN_URL} strategy="afterInteractive" onLoad={() => setSdkReady(true)} />
     <div className={`rounded-xl border-2 p-4 transition-all ${stateColors[callState]}`}>
       {/* Hidden audio element for remote audio */}
       <audio ref={audioRef} autoPlay />
@@ -331,5 +355,6 @@ export default function Softphone({ token, projectId, host, onCallStarted, onCal
         )}
       </div>
     </div>
+    </>
   );
 }
