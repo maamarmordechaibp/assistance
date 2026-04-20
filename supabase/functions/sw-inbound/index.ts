@@ -15,9 +15,22 @@ serve(async (req) => {
   const callSid = formData.get('CallSid') as string;
   const digits = formData.get('Digits') as string | null;
 
+  // Log all form params for debugging
+  const allParams: Record<string, string> = {};
+  formData.forEach((v, k) => { allParams[k] = String(v); });
+  console.log('[sw-inbound] params:', JSON.stringify(allParams));
+
   const supabase = createServiceClient();
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const baseUrl = `${supabaseUrl}/functions/v1`;
+
+  // Store call trace for diagnostic UI
+  await supabase.from('call_traces').insert({
+    call_sid: callSid,
+    step: step || 'initial',
+    from_number: from,
+    details: allParams,
+  }).then(() => {}).catch(() => {});
 
   const url = new URL(req.url);
   const step = url.searchParams.get('step');
@@ -28,9 +41,13 @@ serve(async (req) => {
   if (step === 'dial-fallback' && customerId) {
     const elements: string[] = [];
     const dialCallStatus = formData.get('DialCallStatus') as string | null;
+    const dialSid = formData.get('DialCallSid') as string | null;
+    const dialDuration = formData.get('DialCallDuration') as string | null;
+    console.log(`[sw-inbound] dial-fallback: status=${dialCallStatus} dialSid=${dialSid} duration=${dialDuration}`);
     if (dialCallStatus === 'completed') {
       elements.push(laml.hangup());
     } else {
+      console.log(`[sw-inbound] Rep did not answer (status=${dialCallStatus}). Enqueueing caller.`);
       elements.push(laml.say('The representative did not answer. Please hold while we connect you.'));
       elements.push(laml.enqueue('main-queue', `${baseUrl}/sw-queue-wait`));
     }
@@ -47,9 +64,11 @@ serve(async (req) => {
       .limit(1)
       .single();
 
-    if (availableRep) {
+    const identity = availableRep ? toSwIdentity(availableRep.email) : null;
+    console.log(`[sw-inbound] connect-rep: rep=${availableRep?.full_name || 'NONE'} identity=${identity} email=${availableRep?.email}`);
+    if (availableRep && identity) {
       elements.push(laml.say(`Connecting you to ${availableRep.full_name}.`));
-      elements.push(laml.dialClient(toSwIdentity(availableRep.email), {
+      elements.push(laml.dialClient(identity, {
         record: true,
         timeLimit: 3600,
         timeout: 30,
@@ -76,9 +95,11 @@ serve(async (req) => {
           .limit(1)
           .single();
 
-        if (availableRep) {
+        const identity = availableRep ? toSwIdentity(availableRep.email) : null;
+        console.log(`[sw-inbound] menu=1: rep=${availableRep?.full_name || 'NONE'} identity=${identity} email=${availableRep?.email}`);
+        if (availableRep && identity) {
           elements.push(laml.say(`Connecting you to ${availableRep.full_name}. Please hold.`));
-          elements.push(laml.dialClient(toSwIdentity(availableRep.email), {
+          elements.push(laml.dialClient(identity, {
             record: true,
             timeLimit: 3600,
             timeout: 30,

@@ -25,6 +25,9 @@ serve(async (req) => {
     return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
   }
 
+  const formData = step === 'fallback' ? null : await req.formData();
+  const from = formData?.get('From') as string | null;
+
   if (step === 'dial') {
     // Find the preferred rep or last rep for this customer
     const { data: customer } = await supabase
@@ -74,6 +77,7 @@ serve(async (req) => {
       record: true,
       timeLimit: 3600,
       timeout: 30,
+      callerId: from || undefined,
       action: `${baseUrl}/sw-preferred-rep?step=fallback&customerId=${customerId}`,
     }));
 
@@ -82,8 +86,8 @@ serve(async (req) => {
 
   // ── Fallback: rep didn't answer or call ended ──
   if (step === 'fallback') {
-    const formData = await req.formData();
-    const dialCallStatus = formData.get('DialCallStatus') as string | null;
+    const fallbackData = await req.formData();
+    const dialCallStatus = fallbackData.get('DialCallStatus') as string | null;
 
     if (dialCallStatus === 'completed') {
       // Call was completed normally — end

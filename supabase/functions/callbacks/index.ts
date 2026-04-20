@@ -1,7 +1,7 @@
 // Edge Function: callbacks (GET pending, PATCH complete)
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts';
 import { corsHeaders, handleCors } from '../_shared/cors.ts';
-import { createUserClient, getUser } from '../_shared/supabase.ts';
+import { createServiceClient, getUser } from '../_shared/supabase.ts';
 
 serve(async (req) => {
   const cors = handleCors(req);
@@ -12,7 +12,7 @@ serve(async (req) => {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 
-  const supabase = createUserClient(req);
+  const supabase = createServiceClient();
   const url = new URL(req.url);
 
   if (req.method === 'GET') {

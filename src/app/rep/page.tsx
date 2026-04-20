@@ -69,6 +69,7 @@ export default function RepDashboard() {
   const [webrtcToken, setWebrtcToken] = useState<string | null>(null);
   const [signalwireProjectId, setSignalwireProjectId] = useState<string | null>(null);
   const [signalwireSpaceUrl, setSignalwireSpaceUrl] = useState<string | null>(null);
+  const [signalwireIdentity, setSignalwireIdentity] = useState<string | null>(null);
   const [selectedOutcome, setSelectedOutcome] = useState<string>('');
   const [extensionsUsed, setExtensionsUsed] = useState(0);
   const [maxExtensions, setMaxExtensions] = useState(2);
@@ -94,6 +95,7 @@ export default function RepDashboard() {
           if (data.webrtcToken) setWebrtcToken(data.webrtcToken);
           if (data.signalwireProjectId) setSignalwireProjectId(data.signalwireProjectId);
           if (data.signalwireSpaceUrl) setSignalwireSpaceUrl(data.signalwireSpaceUrl);
+          if (data.signalwireIdentity) setSignalwireIdentity(data.signalwireIdentity);
         }
 
         // Load settings for call extensions
@@ -236,6 +238,7 @@ export default function RepDashboard() {
             if (data.webrtcToken) setWebrtcToken(data.webrtcToken);
             if (data.signalwireProjectId) setSignalwireProjectId(data.signalwireProjectId);
             if (data.signalwireSpaceUrl) setSignalwireSpaceUrl(data.signalwireSpaceUrl);
+            if (data.signalwireIdentity) setSignalwireIdentity(data.signalwireIdentity);
           }
         } catch (err) {
           console.error('Failed to fetch WebRTC token:', err);
@@ -673,6 +676,7 @@ export default function RepDashboard() {
               token={webrtcToken}
               projectId={signalwireProjectId}
               host={signalwireSpaceUrl}
+              identity={signalwireIdentity}
               onCallEnded={() => {
                 setActiveCall(null);
                 setCustomer(null);

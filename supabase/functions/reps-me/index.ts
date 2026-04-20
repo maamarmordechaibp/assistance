@@ -2,7 +2,7 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts';
 import { corsHeaders, handleCors } from '../_shared/cors.ts';
 import { createUserClient, createServiceClient, getUser } from '../_shared/supabase.ts';
-import { createWebRtcToken } from '../_shared/signalwire.ts';
+import { createWebRtcToken, toSwIdentity } from '../_shared/signalwire.ts';
 
 serve(async (req) => {
   const cors = handleCors(req);
@@ -32,7 +32,8 @@ serve(async (req) => {
 
     const signalwireProjectId = Deno.env.get('SIGNALWIRE_PROJECT_ID') || null;
     const signalwireSpaceUrl = Deno.env.get('SIGNALWIRE_SPACE_URL') || null;
-    return new Response(JSON.stringify({ rep, webrtcToken, signalwireProjectId, signalwireSpaceUrl }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    const signalwireIdentity = toSwIdentity(rep.email);
+    return new Response(JSON.stringify({ rep, webrtcToken, signalwireProjectId, signalwireSpaceUrl, signalwireIdentity }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 
   if (req.method === 'PATCH') {
