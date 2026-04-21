@@ -165,6 +165,14 @@ export default function RepDashboard() {
     return () => clearInterval(interval);
   }, [activeCall?.connected_at]);
 
+  // Stable callback — must not be inline in JSX or it recreates on every render,
+  // which would tear down and restart the Relay WebSocket connection each time.
+  const handleCallEnded = useCallback(() => {
+    setActiveCall(null);
+    setCustomer(null);
+    setCredentials([]);
+  }, []);
+
   const loadCustomer = useCallback(async (customerId: string | null) => {
     if (!customerId) {
       setCustomer(null);
@@ -677,11 +685,7 @@ export default function RepDashboard() {
               projectId={signalwireProjectId}
               host={signalwireSpaceUrl}
               identity={signalwireIdentity}
-              onCallEnded={() => {
-                setActiveCall(null);
-                setCustomer(null);
-                setCredentials([]);
-              }}
+              onCallEnded={handleCallEnded}
             />
           </div>
 
