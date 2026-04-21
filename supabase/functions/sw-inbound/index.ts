@@ -24,6 +24,11 @@ serve(async (req) => {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const baseUrl = `${supabaseUrl}/functions/v1`;
 
+  // Parse URL params BEFORE using them
+  const url = new URL(req.url);
+  const step = url.searchParams.get('step');
+  const customerId = url.searchParams.get('customerId');
+
   // Store call trace for diagnostic UI
   await supabase.from('call_traces').insert({
     call_sid: callSid,
@@ -31,10 +36,6 @@ serve(async (req) => {
     from_number: from,
     details: allParams,
   }).then(() => {}).catch(() => {});
-
-  const url = new URL(req.url);
-  const step = url.searchParams.get('step');
-  const customerId = url.searchParams.get('customerId');
 
   // ── Menu response handler ──
   // ── Dial fallback: rep didn't answer after direct dial, fall to queue ──

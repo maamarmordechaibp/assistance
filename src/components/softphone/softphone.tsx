@@ -14,12 +14,15 @@ import {
 } from 'lucide-react';
 
 /* The SignalWire JS v1 (legacy) bundle is loaded via CDN as a <script>.
-   It exports Relay, Verto, CantinaAuth onto window. We use the Verto
-   class which connects to wss://space.signalwire.com — the VERTO endpoint
-   that LaML <Dial><Client> routes calls through. */
+   It exports Relay, Verto, CantinaAuth onto window. We use the Relay
+   class which connects to wss://relay.signalwire.com (DO NOT override
+   host — letting it default is the only URL that actually works).
+   LaML <Dial><Client> routes to whichever protocol the resource is
+   registered on; the Relay JWT from /api/relay/rest/jwt registers the
+   resource on Relay, so Relay receives the call. */
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-declare global { interface Window { Verto: any; } }
+declare global { interface Window { Relay: any; } }
 
 const SW_CDN_URL = 'https://unpkg.com/@signalwire/js@1.5.1-rc.5/dist/index.min.js';
 
@@ -56,26 +59,29 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Initialize SignalWire Verto client for incoming calls via <Dial><Client>
+  // Initialize SignalWire Relay client for incoming calls via <Dial><Client>.
+  // The Relay JWT (from /api/relay/rest/jwt) registers the resource on
+  // relay.signalwire.com. <Dial><Client> routes to that Relay registration.
+  // IMPORTANT: do NOT pass a host override — the default relay.signalwire.com
+  // is the only endpoint that accepts these connections.
   useEffect(() => {
-    if (!token || typeof token !== 'string' || !host || !identity || !sdkReady) return;
-    if (!window.Verto) { setError('SignalWire SDK not loaded'); return; }
+    if (!token || typeof token !== 'string' || !projectId || !sdkReady) return;
+    if (!window.Relay) { setError('SignalWire SDK not loaded'); return; }
 
     let cancelled = false;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let clientInstance: any = null;
 
-    addLog(`Initializing Verto: host=${host} identity=${identity}`);
+    addLog(`Initializing Relay: project=${projectId} identity=${identity ?? 'unknown'}`);
 
     async function initClient() {
       try {
-        // Verto connects directly to wss://space.signalwire.com — the
-        // VERTO endpoint that LaML <Dial><Client> routes calls to.
+        // NO host override — defaults to wss://relay.signalwire.com.
+        // The resource identity is already embedded in the Relay JWT.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const client: any = new window.Verto({
-          host,
-          login: identity,
-          passwd: token,
+        const client: any = new window.Relay({
+          project: projectId,
+          token,
           remoteElement: 'sw-remote-audio',
           localElement: 'sw-local-audio',
         });
@@ -114,7 +120,7 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
           if (cancelled) return;
           setError(null);
           setConnected(true);
-          addLog('CONNECTED — Verto client ready, listening for calls');
+          addLog('CONNECTED — Relay client ready, listening for calls');
         });
 
         client.on('signalwire.error', (err: Error) => {
@@ -162,7 +168,7 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
         setConnected(false);
       }
     };
-  }, [token, host, identity, sdkReady, onCallStarted, onCallEnded, addLog]);
+  }, [token, projectId, identity, sdkReady, onCallStarted, onCallEnded, addLog]);
 
   // Timer for active calls
   useEffect(() => {
