@@ -68,9 +68,7 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let clientInstance: any = null;
 
-    // Strip any protocol prefix — SignalWire() wants just the hostname
-    const spaceHost = host?.replace(/^https?:\/\//, '').replace(/\/$/, '') || undefined;
-    addLog(`Connecting: project=${projectId} host=${spaceHost ?? 'default'} identity=${identity ?? '?'}`);
+    addLog(`Connecting: project=${projectId} identity=${identity ?? '?'}`);
 
     async function initClient() {
       try {
@@ -79,8 +77,10 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
         if (cancelled) return;
 
         addLog('SDK loaded, authenticating...');
+        // NO host override — the SAT token's 'ch' field encodes the correct
+        // WebSocket endpoint (puc.signalwire.com). Passing host: spaceUrl
+        // would try wss://accuinfo.signalwire.com which redirects to SSO.
         clientInstance = await SignalWire({
-          host: spaceHost,
           project: projectId!,
           token: token!,
         });

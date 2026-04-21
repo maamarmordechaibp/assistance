@@ -76,18 +76,22 @@ export function toSwIdentity(email: string): string {
 }
 
 export async function createWebRtcToken(identity: string) {
-  const resource = toSwIdentity(identity);
+  const reference = toSwIdentity(identity);
   const spaceUrl = getSpaceUrl();
   const auth = getAuthHeader();
 
-  // Issue a Relay REST JWT — the Verto client registers as a VERTO endpoint
-  // which is what LaML <Dial><Client> can reach.
-  const res = await fetch(`https://${spaceUrl}/api/relay/rest/jwt`, {
+  // Issue a Call Fabric SAT (Subscriber Access Token) via the fabric API.
+  // The SAT's 'ch' (channel) field encodes the WebSocket endpoint (puc.signalwire.com)
+  // so the v3 SignalWire() client connects to the right host automatically.
+  // reference = the Client name in LaML <Dial><Client>reference</Client>.
+  const res = await fetch(`https://${spaceUrl}/api/fabric/subscribers/tokens`, {
     method: 'POST',
     headers: { Authorization: auth, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ expires_in: 3600, resource }),
+    body: JSON.stringify({ reference, ttl: 3600 }),
   });
-  return res.json();
+  const data = await res.json();
+  // Returns { subscriber_id, token } — we return token as jwt_token for compat
+  return { jwt_token: data.token, subscriber_id: data.subscriber_id, ...data };
 }
 
 export async function listQueues() {
