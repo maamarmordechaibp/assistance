@@ -46,6 +46,12 @@ export function dialClient(
     action?: string;
     callerId?: string;
     timeout?: number;
+    // When set, use <Sip> verb (sip:identity@sipDomain) instead of <Client>.
+    // Required for Call Fabric SAT subscribers which are not in the legacy
+    // LAML/Verto client registry that <Client> checks.
+    sipDomain?: string;
+    // URL played to the rep when they answer (before caller is connected)
+    repGreetingUrl?: string;
   } = {}
 ): string {
   const attrs: string[] = [];
@@ -54,7 +60,38 @@ export function dialClient(
   if (opts.action) attrs.push(`action="${escapeXml(opts.action)}"`);
   if (opts.callerId) attrs.push(`callerId="${escapeXml(opts.callerId)}"`);
   if (opts.timeout) attrs.push(`timeout="${opts.timeout}"`);
+  if (opts.sipDomain) {
+    const sipUri = `sip:${escapeXml(identity)}@${escapeXml(opts.sipDomain)}`;
+    const urlAttr = opts.repGreetingUrl ? ` url="${escapeXml(opts.repGreetingUrl)}"` : '';
+    return `  <Dial ${attrs.join(' ')}>\n    <Sip${urlAttr}>${sipUri}</Sip>\n  </Dial>`;
+  }
   return `  <Dial ${attrs.join(' ')}>\n    <Client>${escapeXml(identity)}</Client>\n  </Dial>`;
+}
+
+/** SimRing: dial multiple identities simultaneously via <Sip> — first to answer wins. */
+export function dialMultipleClients(
+  identities: Array<{ identity: string; repGreetingUrl?: string }>,
+  opts: {
+    record?: boolean;
+    timeLimit?: number;
+    action?: string;
+    callerId?: string;
+    timeout?: number;
+    sipDomain: string;
+  }
+): string {
+  const attrs: string[] = [];
+  if (opts.record) attrs.push('record="record-from-answer-dual"');
+  if (opts.timeLimit) attrs.push(`timeLimit="${opts.timeLimit}"`);
+  if (opts.action) attrs.push(`action="${escapeXml(opts.action)}"`);
+  if (opts.callerId) attrs.push(`callerId="${escapeXml(opts.callerId)}"`);
+  if (opts.timeout) attrs.push(`timeout="${opts.timeout}"`);
+  const sipNoun = identities.map(({ identity, repGreetingUrl }) => {
+    const sipUri = `sip:${escapeXml(identity)}@${escapeXml(opts.sipDomain)}`;
+    const urlAttr = repGreetingUrl ? ` url="${escapeXml(repGreetingUrl)}"` : '';
+    return `    <Sip${urlAttr}>${sipUri}</Sip>`;
+  }).join('\n');
+  return `  <Dial ${attrs.join(' ')}>\n${sipNoun}\n  </Dial>`;
 }
 
 export function enqueue(queueName: string, waitUrl?: string): string {

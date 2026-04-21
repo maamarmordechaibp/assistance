@@ -79,6 +79,7 @@ serve(async (req) => {
       timeout: 30,
       callerId: from || undefined,
       action: `${baseUrl}/sw-preferred-rep?step=fallback&customerId=${customerId}`,
+      sipDomain: Deno.env.get('SIGNALWIRE_SPACE_URL'),
     }));
 
     return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });

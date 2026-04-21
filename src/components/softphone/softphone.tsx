@@ -28,11 +28,13 @@ interface SoftphoneProps {
   identity: string | null;
   onCallStarted?: (callId: string, fromNumber: string) => void;
   onCallEnded?: () => void;
+  /** Called once the client is ready — receives a function to initiate an outbound call */
+  onReady?: (makeCall: (toNumber: string) => Promise<void>) => void;
 }
 
 type CallState = 'idle' | 'connecting' | 'ringing' | 'active' | 'ending';
 
-export default function Softphone({ token, projectId, host, identity, onCallStarted, onCallEnded }: SoftphoneProps) {
+export default function Softphone({ token, projectId, host, identity, onCallStarted, onCallEnded, onReady }: SoftphoneProps) {
   const [callState, setCallState] = useState<CallState>('idle');
   const [muted, setMuted] = useState(false);
   const [deafened, setDeafened] = useState(false);
@@ -91,10 +93,25 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
 
         await clientInstance.online({
           incomingCallHandlers: {
+            // 'all' catches every source (websocket, push, SIP-originated, etc.)
+            // Using 'websocket' only fired for client-originated calls; LAML <Sip>
+            // calls arrive with a different source and were silently dropped.
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            websocket: (notification: any) => {
+            all: (notification: any) => {
               if (cancelled) return;
+              // Log the full notification shape so we can debug source/type
+              console.log('[Softphone] incoming notification:', JSON.stringify({
+                source: notification?.invite?.details?.source ?? notification?.source,
+                callID: notification?.invite?.details?.callID,
+                caller_id_number: notification?.invite?.details?.caller_id_number,
+                caller_id_name: notification?.invite?.details?.caller_id_name,
+                keys: Object.keys(notification ?? {}),
+              }));
               const { invite } = notification;
+              if (!invite) {
+                addLog('WARNING: notification had no invite property — ignored');
+                return;
+              }
               inviteRef.current = invite;
               const from = invite.details?.caller_id_number
                 || invite.details?.caller_id_name
@@ -110,6 +127,36 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
         setConnected(true);
         setError(null);
         addLog(`CONNECTED — listening for calls as ${identity ?? 'unknown'}`);
+
+        // Expose outbound call capability to parent
+        if (onReady) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const makeOutboundCall = async (toNumber: string) => {
+            if (!clientInstance) throw new Error('Not connected');
+            setCallState('connecting');
+            setCallerNumber(toNumber);
+            addLog(`Dialing ${toNumber}...`);
+            try {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const call: any = await (clientInstance as any).dial({
+                to: toNumber,   // E.164 number or 'sip:user@domain'
+                audio: true,
+                video: false,
+              });
+              callRef.current = call;
+              setCallState('active');
+              addLog(`Outbound call active to ${toNumber}`);
+              onCallStarted?.(call.id ?? 'call', toNumber);
+              try { call.on('destroy', () => { callRef.current = null; setCallState('idle'); setCallerNumber(''); onCallEnded?.(); }); } catch { /* ignore */ }
+            } catch (err) {
+              addLog(`Dial failed: ${err instanceof Error ? err.message : err}`);
+              setCallState('idle');
+              setCallerNumber('');
+              throw err;
+            }
+          };
+          onReady(makeOutboundCall);
+        }
       } catch (err: unknown) {
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : String(err);

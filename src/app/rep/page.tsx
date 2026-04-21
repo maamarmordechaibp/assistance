@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { formatMinutes, formatDuration, formatPhone } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -79,6 +79,8 @@ export default function RepDashboard() {
   const [showNameCapture, setShowNameCapture] = useState(false);
   const [newCustomerName, setNewCustomerName] = useState('');
   const [identityConfirmed, setIdentityConfirmed] = useState(false);
+  // makeCallFn is wired from the softphone onReady callback so other pages can use it
+  const makeCallFnRef = useRef<((to: string) => Promise<void>) | null>(null);
 
   const supabase = createClient();
 
@@ -686,6 +688,13 @@ export default function RepDashboard() {
               host={signalwireSpaceUrl}
               identity={signalwireIdentity}
               onCallEnded={handleCallEnded}
+              onReady={(makeCall) => {
+                makeCallFnRef.current = makeCall;
+                // Also wire into the callbacks page if it's currently mounted
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const cbRef = (window as any).__repCallbacksMakeCallRef;
+                if (cbRef) cbRef.current = makeCall;
+              }}
             />
           </div>
 
