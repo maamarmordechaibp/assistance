@@ -91,42 +91,52 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
         clientRef.current = clientInstance;
         addLog('Authenticated, going online for incoming calls...');
 
-        await clientInstance.online({
-          incomingCallHandlers: {
-            // 'all' catches every source (websocket, push, SIP-originated, etc.)
-            // Using 'websocket' only fired for client-originated calls; LAML <Sip>
-            // calls arrive with a different source and were silently dropped.
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            all: (notification: any) => {
-              if (cancelled) return;
-              // Log the full notification shape so we can debug source/type
-              console.log('[Softphone] incoming notification:', JSON.stringify({
-                source: notification?.invite?.details?.source ?? notification?.source,
-                callID: notification?.invite?.details?.callID,
-                caller_id_number: notification?.invite?.details?.caller_id_number,
-                caller_id_name: notification?.invite?.details?.caller_id_name,
-                keys: Object.keys(notification ?? {}),
-              }));
-              const { invite } = notification;
-              if (!invite) {
-                addLog('WARNING: notification had no invite property — ignored');
-                return;
-              }
-              inviteRef.current = invite;
-              const from = invite.details?.caller_id_number
-                || invite.details?.caller_id_name
-                || 'Unknown';
-              addLog(`RINGING — incoming call from ${from}`);
-              setCallerNumber(from);
-              setCallState('ringing');
-            },
-          },
-        });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const incomingHandler = (notification: any) => {
+          if (cancelled) return;
+          console.log('[Softphone] incoming notification:', JSON.stringify({
+            source: notification?.invite?.details?.source ?? notification?.source,
+            callID: notification?.invite?.details?.callID,
+            caller_id_number: notification?.invite?.details?.caller_id_number,
+            caller_id_name: notification?.invite?.details?.caller_id_name,
+            keys: Object.keys(notification ?? {}),
+          }));
+          const { invite } = notification;
+          if (!invite) {
+            addLog('WARNING: notification had no invite property — ignored');
+            return;
+          }
+          inviteRef.current = invite;
+          const from = invite.details?.caller_id_number
+            || invite.details?.caller_id_name
+            || 'Unknown';
+          addLog(`RINGING — incoming call from ${from}`);
+          setCallerNumber(from);
+          setCallState('ringing');
+        };
+
+        // Try 'all' first — catches SIP/fabric-sourced calls (not just websocket).
+        // Some projects reject push-notification registration with -32003; fall
+        // back to 'websocket' only in that case so the browser at least connects.
+        let handlerMode = 'all';
+        try {
+          await clientInstance.online({
+            incomingCallHandlers: { all: incomingHandler },
+          });
+        } catch (onlineErr: unknown) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const code = (onlineErr as any)?.code ?? (onlineErr as any)?.message ?? String(onlineErr);
+          addLog(`"all" handler rejected (${code}), retrying with websocket-only...`);
+          handlerMode = 'websocket';
+          await clientInstance.online({
+            incomingCallHandlers: { websocket: incomingHandler },
+          });
+        }
         if (cancelled) return;
 
         setConnected(true);
         setError(null);
-        addLog(`CONNECTED — listening for calls as ${identity ?? 'unknown'}`);
+        addLog(`CONNECTED — listening for calls as ${identity ?? 'unknown'} (handler: ${handlerMode})`);
 
         // Expose outbound call capability to parent
         if (onReady) {
@@ -159,9 +169,11 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
         }
       } catch (err: unknown) {
         if (cancelled) return;
-        const msg = err instanceof Error ? err.message : String(err);
+        // SignalWire errors are plain objects {code, message}, not Error instances
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const msg = err instanceof Error ? err.message : ((err as any)?.message ?? JSON.stringify(err));
         console.error('[Softphone] init error:', err);
-        addLog(`FAILED: ${msg}`);
+        addLog(`FAILED: ${msg.slice(0, 120)}`);
         setError('Phone connection failed: ' + msg.slice(0, 100));
       }
     }
