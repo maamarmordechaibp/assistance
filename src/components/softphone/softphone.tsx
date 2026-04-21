@@ -1,6 +1,5 @@
 'use client';
 
-import Script from 'next/script';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Phone,
@@ -13,18 +12,14 @@ import {
   Loader2,
 } from 'lucide-react';
 
-/* The SignalWire JS v1 (legacy) bundle is loaded via CDN as a <script>.
-   It exports Relay, Verto, CantinaAuth onto window. We use the Relay
-   class which connects to wss://relay.signalwire.com (DO NOT override
-   host — letting it default is the only URL that actually works).
-   LaML <Dial><Client> routes to whichever protocol the resource is
-   registered on; the Relay JWT from /api/relay/rest/jwt registers the
-   resource on Relay, so Relay receives the call. */
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-declare global { interface Window { Relay: any; } }
-
-const SW_CDN_URL = 'https://unpkg.com/@signalwire/js@1.5.1-rc.5/dist/index.min.js';
+/* SignalWire JS v3 — Call Fabric SDK.
+   Loaded via dynamic import (prevents SSR/WebRTC module issues).
+   SignalWire() connects to the SPACE URL (accuinfo.signalwire.com)
+   and registers the resource as a proper <Client> target so that
+   LaML <Dial><Client>identity</Client> can reach it.
+   The v1 Relay SDK connected to relay.signalwire.com (blade protocol)
+   which does NOT register for <Dial><Client> routing — hence the
+   DialCallStatus=failed. This v3 client fixes that. */
 
 interface SoftphoneProps {
   token: string | null;
@@ -44,7 +39,6 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
   const [duration, setDuration] = useState(0);
   const [callerNumber, setCallerNumber] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [sdkReady, setSdkReady] = useState(false);
   const [connected, setConnected] = useState(false);
   const [connectionLog, setConnectionLog] = useState<string[]>([]);
 
@@ -55,101 +49,73 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
   }, []);
 
   const clientRef = useRef<unknown>(null);
-  const callRef = useRef<unknown>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const inviteRef = useRef<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const callRef = useRef<any>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Hidden div where the v3 SDK mounts audio elements for the call
+  const audioRootRef = useRef<HTMLDivElement | null>(null);
 
-  // Initialize SignalWire Relay client for incoming calls via <Dial><Client>.
-  // The Relay JWT (from /api/relay/rest/jwt) registers the resource on
-  // relay.signalwire.com. <Dial><Client> routes to that Relay registration.
-  // IMPORTANT: do NOT pass a host override — the default relay.signalwire.com
-  // is the only endpoint that accepts these connections.
+  // Connect to SignalWire Call Fabric and register for incoming calls.
+  // Uses dynamic import so WebRTC code never runs during SSR.
+  // The space URL (accuinfo.signalwire.com) is the correct host for the
+  // Call Fabric protocol — this is what <Dial><Client> routes to.
   useEffect(() => {
-    if (!token || typeof token !== 'string' || !projectId || !sdkReady) return;
-    if (!window.Relay) { setError('SignalWire SDK not loaded'); return; }
+    if (!token || !projectId) return;
 
     let cancelled = false;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let clientInstance: any = null;
 
-    addLog(`Initializing Relay: project=${projectId} identity=${identity ?? 'unknown'}`);
+    // Strip any protocol prefix — SignalWire() wants just the hostname
+    const spaceHost = host?.replace(/^https?:\/\//, '').replace(/\/$/, '') || undefined;
+    addLog(`Connecting: project=${projectId} host=${spaceHost ?? 'default'} identity=${identity ?? '?'}`);
 
     async function initClient() {
       try {
-        // NO host override — defaults to wss://relay.signalwire.com.
-        // The resource identity is already embedded in the Relay JWT.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const client: any = new window.Relay({
-          project: projectId,
-          token,
-          remoteElement: 'sw-remote-audio',
-          localElement: 'sw-local-audio',
-        });
+        // Dynamic import: WebRTC modules only load in browser context
+        const { SignalWire } = await import('@signalwire/js');
         if (cancelled) return;
-        clientInstance = client;
 
-        // Handle call notifications (fired by BaseCall.setState → _dispatchNotification)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        client.on('signalwire.notification', (notification: any) => {
-          if (cancelled) return;
-          addLog(`Notification: type=${notification.type} state=${notification.call?.state}`);
-          if (notification.type === 'callUpdate') {
-            const call = notification.call;
-            const state = call.state; // e.g. 'ringing', 'active', 'hangup', 'destroy'
-            if (state === 'ringing' && !callRef.current) {
-              callRef.current = call;
-              const from = call.options?.remoteCallerNumber || call.from || 'Unknown';
+        addLog('SDK loaded, authenticating...');
+        clientInstance = await SignalWire({
+          host: spaceHost,
+          project: projectId!,
+          token: token!,
+        });
+        if (cancelled) { clientInstance.disconnect?.().catch(() => {}); return; }
+
+        clientRef.current = clientInstance;
+        addLog('Authenticated, going online for incoming calls...');
+
+        await clientInstance.online({
+          incomingCallHandlers: {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            websocket: (notification: any) => {
+              if (cancelled) return;
+              const { invite } = notification;
+              inviteRef.current = invite;
+              const from = invite.details?.caller_id_number
+                || invite.details?.caller_id_name
+                || 'Unknown';
+              addLog(`RINGING — incoming call from ${from}`);
               setCallerNumber(from);
               setCallState('ringing');
-            } else if (state === 'active') {
-              setCallState('active');
-              const from = call.options?.remoteCallerNumber || call.from || 'Unknown';
-              onCallStarted?.(call.id, from);
-            } else if (state === 'hangup' || state === 'destroy') {
-              callRef.current = null;
-              setCallState('idle');
-              setCallerNumber('');
-              setMuted(false);
-              setDeafened(false);
-              onCallEnded?.();
-            }
-          }
+            },
+          },
         });
+        if (cancelled) return;
 
-        client.on('signalwire.ready', () => {
-          if (cancelled) return;
-          setError(null);
-          setConnected(true);
-          addLog('CONNECTED — Relay client ready, listening for calls');
-        });
-
-        client.on('signalwire.error', (err: Error) => {
-          console.error('SignalWire error:', err);
-          addLog(`ERROR: ${err?.message || err}`);
-          if (!cancelled) setError('Phone connection error');
-        });
-
-        client.on('signalwire.socket.open', () => {
-          addLog('WebSocket opened');
-        });
-
-        client.on('signalwire.socket.close', () => {
-          addLog('WebSocket CLOSED');
-          if (!cancelled) { setError('Phone disconnected'); setConnected(false); }
-        });
-
-        client.on('signalwire.socket.error', (e: unknown) => {
-          addLog(`WebSocket ERROR: ${e}`);
-        });
-
-        addLog('Calling client.connect()...');
-        await client.connect();
-        clientRef.current = clientInstance;
-        addLog('client.connect() returned');
-      } catch (err) {
-        console.error('SignalWire init error:', err);
-        addLog(`INIT FAILED: ${err}`);
-        setError('Failed to connect to phone system');
+        setConnected(true);
+        setError(null);
+        addLog(`CONNECTED — listening for calls as ${identity ?? 'unknown'}`);
+      } catch (err: unknown) {
+        if (cancelled) return;
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[Softphone] init error:', err);
+        addLog(`FAILED: ${msg}`);
+        setError('Phone connection failed: ' + msg.slice(0, 100));
       }
     }
 
@@ -157,20 +123,20 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
 
     return () => {
       cancelled = true;
-      if (clientInstance) {
+      inviteRef.current = null;
+      callRef.current = null;
+      const c = clientInstance;
+      clientInstance = null;
+      clientRef.current = null;
+      setConnected(false);
+      if (c) {
         addLog('Disconnecting...');
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const c = clientInstance as any;
-        c.disconnect?.();
-        c.destroy?.();
-        clientInstance = null;
-        clientRef.current = null;
-        setConnected(false);
+        c.disconnect?.().catch(() => {});
       }
     };
-  }, [token, projectId, identity, sdkReady, onCallStarted, onCallEnded, addLog]);
+  }, [token, projectId, host, identity, addLog]);
 
-  // Timer for active calls
+  // Duration timer
   useEffect(() => {
     if (callState === 'active') {
       const start = Date.now();
@@ -196,27 +162,64 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
   };
 
   const answerCall = useCallback(async () => {
-    if (!callRef.current) return;
+    if (!inviteRef.current) return;
     try {
       setCallState('connecting');
-      const call = callRef.current as { answer: () => Promise<void> };
-      await call.answer();
+      addLog('Answering call...');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const call: any = await inviteRef.current.accept({
+        audio: true,
+        video: false,
+        negotiateVideo: false,
+        rootElement: audioRootRef.current ?? undefined,
+      });
+      callRef.current = call;
+      inviteRef.current = null;
+      setCallState('active');
+      addLog('Call active');
+      const from = callerNumber;
+      onCallStarted?.(call.id ?? 'call', from);
+
+      // Detect remote hangup / call destroyed
+      const handleCallEnded = () => {
+        if (callRef.current === call) {
+          callRef.current = null;
+          setCallState('idle');
+          setCallerNumber('');
+          setMuted(false);
+          setDeafened(false);
+          addLog('Call ended (remote)');
+          onCallEnded?.();
+        }
+      };
+      // v3 Call Fabric fires 'destroy' when the session ends
+      try { call.on('destroy', handleCallEnded); } catch { /* ignore */ }
+      try { call.on('call.left', handleCallEnded); } catch { /* ignore */ }
     } catch (err) {
       console.error('Answer error:', err);
+      addLog(`Answer failed: ${err instanceof Error ? err.message : err}`);
+      callRef.current = null;
+      inviteRef.current = null;
       setCallState('idle');
     }
-  }, []);
+  }, [callerNumber, onCallStarted, onCallEnded, addLog]);
 
   const hangup = useCallback(async () => {
-    if (!callRef.current) return;
     try {
       setCallState('ending');
-      const call = callRef.current as { hangup: () => Promise<void> };
-      await call.hangup();
+      if (inviteRef.current) {
+        addLog('Rejecting call...');
+        await inviteRef.current.reject().catch(() => {});
+        inviteRef.current = null;
+      } else if (callRef.current) {
+        addLog('Ending call...');
+        await callRef.current.end().catch(() => {});
+      }
     } catch (err) {
       console.error('Hangup error:', err);
     } finally {
       callRef.current = null;
+      inviteRef.current = null;
       setCallState('idle');
       setCallerNumber('');
       setMuted(false);
@@ -228,17 +231,10 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
   const toggleMute = useCallback(async () => {
     if (!callRef.current) return;
     try {
-      const call = callRef.current as {
-        toggleAudioMute?: () => void;
-        muteAudio?: () => void;
-        unmuteAudio?: () => void;
-      };
-      if (call.toggleAudioMute) {
-        call.toggleAudioMute();
-      } else if (muted) {
-        call.unmuteAudio?.();
+      if (muted) {
+        await callRef.current.audioUnmute?.();
       } else {
-        call.muteAudio?.();
+        await callRef.current.audioMute?.();
       }
       setMuted(!muted);
     } catch (err) {
@@ -249,17 +245,10 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
   const toggleDeafen = useCallback(async () => {
     if (!callRef.current) return;
     try {
-      const call = callRef.current as {
-        toggleDeaf?: () => void;
-        deaf?: () => void;
-        undeaf?: () => void;
-      };
-      if (call.toggleDeaf) {
-        call.toggleDeaf();
-      } else if (deafened) {
-        call.undeaf?.();
+      if (deafened) {
+        await callRef.current.undeaf?.();
       } else {
-        call.deaf?.();
+        await callRef.current.deaf?.();
       }
       setDeafened(!deafened);
     } catch (err) {
@@ -286,23 +275,17 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
 
   if (!token) {
     return (
-      <>
-        <Script src={SW_CDN_URL} strategy="afterInteractive" onLoad={() => setSdkReady(true)} />
-        <div className="bg-gray-50 rounded-xl border p-4 text-center text-sm text-gray-500">
-          <Phone className="w-6 h-6 mx-auto mb-2 text-gray-300" />
-          Set yourself as Available to enable the softphone.
-        </div>
-      </>
+      <div className="bg-gray-50 rounded-xl border p-4 text-center text-sm text-gray-500">
+        <Phone className="w-6 h-6 mx-auto mb-2 text-gray-300" />
+        Set yourself as Available to enable the softphone.
+      </div>
     );
   }
 
   return (
-    <>
-      <Script src={SW_CDN_URL} strategy="afterInteractive" onLoad={() => setSdkReady(true)} />
     <div className={`rounded-xl border-2 p-4 transition-all ${stateColors[callState]}`}>
-      {/* Hidden audio elements for WebRTC media */}
-      <audio id="sw-remote-audio" ref={audioRef} autoPlay />
-      <audio id="sw-local-audio" style={{ display: 'none' }} />
+      {/* Hidden div — v3 SDK mounts audio elements here during a call */}
+      <div ref={audioRootRef} style={{ display: 'none' }} aria-hidden="true" />
 
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
@@ -411,6 +394,5 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
         </div>
       </details>
     </div>
-    </>
   );
 }
