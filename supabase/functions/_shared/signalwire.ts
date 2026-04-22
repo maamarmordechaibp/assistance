@@ -170,55 +170,41 @@ export async function listQueues() {
  *  (`sip:identity@space` returns 408); they must be addressed through the
  *  Fabric `/private/<name>` path with the SWML `connect` verb.
  *
- *  Returns null if no address can be discovered, so callers can fall back. */
+ *  The subscriber resource's `display_name` IS the Fabric address name
+ *  (verified empirically — the space doesn't expose a separate /addresses
+ *  endpoint on this plan). */
 export async function getSubscriberAddressPath(identity: string): Promise<string | null> {
   const { email } = subscriberCreds(identity);
   const spaceUrl = getSpaceUrl();
   const auth = getAuthHeader();
 
   try {
-    // 1) Resolve subscriber id by email.
-    const listRes = await fetch(`https://${spaceUrl}/api/fabric/resources/subscribers?email=${encodeURIComponent(email)}`, {
+    const listRes = await fetch(`https://${spaceUrl}/api/fabric/resources/subscribers?page_size=200`, {
       headers: { Authorization: auth },
     });
-    if (!listRes.ok) return null;
+    if (!listRes.ok) {
+      console.error(`[signalwire] list subscribers HTTP ${listRes.status}`);
+      return `/private/${identity}`; // best-effort fallback
+    }
     const listData = await listRes.json();
-    const sub = Array.isArray(listData?.data)
-      ? listData.data.find((s: { email?: string }) => s.email === email)
-      : null;
-    if (!sub?.id) return null;
+    type SubResource = {
+      id: string;
+      display_name?: string;
+      subscriber?: { email?: string };
+    };
+    const rows: SubResource[] = Array.isArray(listData?.data) ? listData.data : [];
 
-    // 2) Fetch the subscriber resource detail — should include its addresses.
-    const detailRes = await fetch(`https://${spaceUrl}/api/fabric/resources/subscribers/${sub.id}`, {
-      headers: { Authorization: auth },
-    });
-    if (!detailRes.ok) return null;
-    const detail = await detailRes.json();
+    // 1) Match by subscriber.email (canonical, what createWebRtcToken uses).
+    let match = rows.find((r) => r?.subscriber?.email === email);
+    // 2) Fallback: match by display_name == identity (which is what we store
+    //    and what the Fabric address path is rooted at).
+    if (!match) match = rows.find((r) => r?.display_name === identity);
 
-    type Addr = { name?: string; display_name?: string; context?: string; resource_type?: string };
-    const addresses: Addr[] = detail?.addresses || detail?.data?.addresses || [];
-    const priv = addresses.find((a) => (a.context || '').toLowerCase() === 'private') || addresses[0];
-    if (priv?.name) {
-      const ctx = (priv.context || 'private').toLowerCase();
-      return `/${ctx}/${priv.name}`;
-    }
-    // 3) Fallback — hit the /addresses endpoint directly.
-    const addrRes = await fetch(`https://${spaceUrl}/api/fabric/resources/addresses?type=subscriber&page_size=100`, {
-      headers: { Authorization: auth },
-    });
-    if (addrRes.ok) {
-      const addrData = await addrRes.json();
-      const arr: Array<{ name?: string; display_name?: string; context?: string; resource_id?: string }> = addrData?.data || [];
-      const match = arr.find((a) => a.resource_id === sub.id);
-      if (match?.name) {
-        const ctx = (match.context || 'private').toLowerCase();
-        return `/${ctx}/${match.name}`;
-      }
-    }
-    return null;
+    const name = match?.display_name || identity;
+    return `/private/${name}`;
   } catch (e) {
     console.error('[signalwire] getSubscriberAddressPath failed:', e);
-    return null;
+    return `/private/${identity}`;
   }
 }
 
