@@ -11,21 +11,28 @@ import {
   VolumeX,
   Loader2,
 } from 'lucide-react';
+import { createClient } from '@/lib/supabase/client';
+import { edgeFn } from '@/lib/supabase/edge';
 
 /* SignalWire JS v3 — Call Fabric SDK.
-   Loaded via dynamic import (prevents SSR/WebRTC module issues).
-   SignalWire() connects to the SPACE URL (accuinfo.signalwire.com)
-   and registers the resource as a proper <Client> target so that
-   LaML <Dial><Client>identity</Client> can reach it.
-   The v1 Relay SDK connected to relay.signalwire.com (blade protocol)
-   which does NOT register for <Dial><Client> routing — hence the
-   DialCallStatus=failed. This v3 client fixes that. */
+   Architecture note: we do NOT call client.online(). SAT tokens issued
+   by /api/fabric/subscribers/tokens reject subscriber.online with -32603
+   on v3.30 (see signalwire-legacy-js#1339). Instead, inbound callers are
+   parked in SignalWire queues (rep_<id> or 'general') by the sw-inbound
+   LaML webhook, which also inserts a call_queue row in Supabase. This
+   component subscribes to call_queue via Supabase Realtime, shows an
+   incoming ring when a row arrives, and on Answer it:
+     1) POSTs to call-claim to atomically reserve the row, then
+     2) client.dial({ to: 'queue:<name>' }) — SignalWire bridges us to
+        the oldest caller in that queue. */
 
 interface SoftphoneProps {
   token: string | null;
   projectId: string | null;
   host: string | null;
   identity: string | null;
+  /** Rep UUID (reps.id == auth.users.id). Needed to filter queue rows. */
+  repId: string | null;
   onCallStarted?: (callId: string, fromNumber: string) => void;
   onCallEnded?: () => void;
   /** Called once the client is ready — receives a function to initiate an outbound call */
@@ -34,7 +41,14 @@ interface SoftphoneProps {
 
 type CallState = 'idle' | 'connecting' | 'ringing' | 'active' | 'ending';
 
-export default function Softphone({ token, projectId, host, identity, onCallStarted, onCallEnded, onReady }: SoftphoneProps) {
+interface PendingQueueRing {
+  queueId: string;
+  queueName: string;
+  fromNumber: string;
+  callerName: string | null;
+}
+
+export default function Softphone({ token, projectId, host, identity, repId, onCallStarted, onCallEnded, onReady }: SoftphoneProps) {
   const [callState, setCallState] = useState<CallState>('idle');
   const [muted, setMuted] = useState(false);
   const [deafened, setDeafened] = useState(false);
@@ -51,18 +65,14 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
   }, []);
 
   const clientRef = useRef<unknown>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const inviteRef = useRef<any>(null);
+  const pendingRingRef = useRef<PendingQueueRing | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const callRef = useRef<any>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   // Hidden div where the v3 SDK mounts audio elements for the call
   const audioRootRef = useRef<HTMLDivElement | null>(null);
 
-  // Connect to SignalWire Call Fabric and register for incoming calls.
-  // Uses dynamic import so WebRTC code never runs during SSR.
-  // The space URL (accuinfo.signalwire.com) is the correct host for the
-  // Call Fabric protocol — this is what <Dial><Client> routes to.
+  // ── SignalWire client init (for outbound dial + answering queues) ──
   useEffect(() => {
     if (!token || !projectId) return;
 
@@ -79,9 +89,6 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
         if (cancelled) return;
 
         addLog('SDK loaded, authenticating...');
-        // NO host override — the SAT token's 'ch' field encodes the correct
-        // WebSocket endpoint (puc.signalwire.com). Passing host: spaceUrl
-        // would try wss://accuinfo.signalwire.com which redirects to SSO.
         clientInstance = await SignalWire({
           project: projectId!,
           token: token!,
@@ -89,58 +96,12 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
         if (cancelled) { clientInstance.disconnect?.().catch(() => {}); return; }
 
         clientRef.current = clientInstance;
-        addLog('Authenticated, going online for incoming calls...');
-
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const incomingHandler = (notification: any) => {
-          if (cancelled) return;
-          console.log('[Softphone] incoming notification:', JSON.stringify({
-            source: notification?.invite?.details?.source ?? notification?.source,
-            callID: notification?.invite?.details?.callID,
-            caller_id_number: notification?.invite?.details?.caller_id_number,
-            caller_id_name: notification?.invite?.details?.caller_id_name,
-            keys: Object.keys(notification ?? {}),
-          }));
-          const { invite } = notification;
-          if (!invite) {
-            addLog('WARNING: notification had no invite property — ignored');
-            return;
-          }
-          inviteRef.current = invite;
-          const from = invite.details?.caller_id_number
-            || invite.details?.caller_id_name
-            || 'Unknown';
-          addLog(`RINGING — incoming call from ${from}`);
-          setCallerNumber(from);
-          setCallState('ringing');
-        };
-
-        // Try 'all' first — catches SIP/fabric-sourced calls (not just websocket).
-        // Some projects reject push-notification registration with -32003; fall
-        // back to 'websocket' only in that case so the browser at least connects.
-        let handlerMode = 'all';
-        try {
-          await clientInstance.online({
-            incomingCallHandlers: { all: incomingHandler },
-          });
-        } catch (onlineErr: unknown) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const code = (onlineErr as any)?.code ?? (onlineErr as any)?.message ?? String(onlineErr);
-          addLog(`"all" handler rejected (${code}), retrying with websocket-only...`);
-          handlerMode = 'websocket';
-          await clientInstance.online({
-            incomingCallHandlers: { websocket: incomingHandler },
-          });
-        }
-        if (cancelled) return;
-
         setConnected(true);
         setError(null);
-        addLog(`CONNECTED — listening for calls as ${identity ?? 'unknown'} (handler: ${handlerMode})`);
+        addLog(`Ready (queue-mode) — waiting for calls as ${identity ?? 'unknown'}`);
 
         // Expose outbound call capability to parent
         if (onReady) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const makeOutboundCall = async (toNumber: string) => {
             if (!clientInstance) throw new Error('Not connected');
             setCallState('connecting');
@@ -149,7 +110,8 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
             try {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const call: any = await (clientInstance as any).dial({
-                to: toNumber,   // E.164 number or 'sip:user@domain'
+                to: toNumber,
+                rootElement: audioRootRef.current ?? undefined,
                 audio: true,
                 video: false,
               });
@@ -169,7 +131,6 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
         }
       } catch (err: unknown) {
         if (cancelled) return;
-        // SignalWire errors are plain objects {code, message}, not Error instances
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const msg = err instanceof Error ? err.message : ((err as any)?.message ?? JSON.stringify(err));
         console.error('[Softphone] init error:', err);
@@ -182,7 +143,7 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
 
     return () => {
       cancelled = true;
-      inviteRef.current = null;
+      pendingRingRef.current = null;
       callRef.current = null;
       const c = clientInstance;
       clientInstance = null;
@@ -193,7 +154,93 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
         c.disconnect?.().catch(() => {});
       }
     };
-  }, [token, projectId, host, identity, addLog]);
+  }, [token, projectId, host, identity, addLog, onReady, onCallStarted, onCallEnded]);
+
+  // ── Supabase Realtime (primary) + polling (fallback) for call_queue rows ──
+  useEffect(() => {
+    if (!repId) return;
+    const supabase = createClient();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tryPickupRow = (row: any, source: string) => {
+      if (!row || row.status !== 'waiting') return;
+      if (row.target_rep_id && row.target_rep_id !== repId) return;
+      if (pendingRingRef.current || callRef.current) return;
+      pendingRingRef.current = {
+        queueId: row.id,
+        queueName: row.queue_name,
+        fromNumber: row.from_number,
+        callerName: row.caller_name,
+      };
+      setCallerNumber(row.caller_name || row.from_number);
+      setCallState('ringing');
+      addLog(`RINGING (${source}) from ${row.from_number} [queue=${row.queue_name}]`);
+    };
+
+    // Poll every 2s for waiting rows — robust fallback regardless of Realtime.
+    let firstPoll = true;
+    const poll = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('call_queue')
+          .select('id, queue_name, from_number, caller_name, target_rep_id, status')
+          .eq('status', 'waiting')
+          .or(`target_rep_id.eq.${repId},target_rep_id.is.null`)
+          .order('enqueued_at', { ascending: true })
+          .limit(1);
+        if (error) {
+          addLog(`queue poll error: ${error.message.slice(0, 80)}`);
+          return;
+        }
+        if (firstPoll) {
+          addLog(`poll ok — ${data?.length ?? 0} waiting row(s) visible to me`);
+          firstPoll = false;
+        }
+        if (data && data[0]) tryPickupRow(data[0], 'poll');
+      } catch { /* ignore transient */ }
+    };
+    poll();
+    const pollInterval = setInterval(poll, 2000);
+
+    const channel = supabase
+      .channel(`call-queue-rep-${repId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'call_queue' },
+        (payload) => tryPickupRow(payload.new, 'realtime')
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'call_queue' },
+        (payload) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const row = payload.new as any;
+          if (!row) return;
+          // If the ringing row got claimed elsewhere or ended, clear the ring.
+          if (pendingRingRef.current && pendingRingRef.current.queueId === row.id && row.status !== 'waiting') {
+            const claimedByUs = row.claimed_by_rep_id === repId && row.status === 'claimed';
+            if (!claimedByUs) {
+              pendingRingRef.current = null;
+              setCallerNumber('');
+              setCallState('idle');
+              addLog(`Ring cleared (row ${row.status})`);
+            }
+          }
+        }
+      )
+      .subscribe((status) => {
+        addLog(`queue channel: ${status}`);
+      });
+
+    return () => {
+      clearInterval(pollInterval);
+      supabase.removeChannel(channel).catch(() => {});
+    };
+  }, [repId, addLog]);
+
+    return () => { supabase.removeChannel(channel).catch(() => {}); };
+  }, [repId, addLog]);
+
 
   // Duration timer
   useEffect(() => {
@@ -221,25 +268,40 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
   };
 
   const answerCall = useCallback(async () => {
-    if (!inviteRef.current) return;
+    const ring = pendingRingRef.current;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const clientInstance: any = clientRef.current;
+    if (!ring || !clientInstance) return;
     try {
       setCallState('connecting');
-      addLog('Answering call...');
+      addLog(`Claiming queue row ${ring.queueId}...`);
+      const claimRes = await edgeFn('call-claim', {
+        method: 'POST',
+        body: JSON.stringify({ queue_id: ring.queueId }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!claimRes.ok) {
+        addLog(`Claim failed (${claimRes.status}) — another rep got it`);
+        pendingRingRef.current = null;
+        setCallState('idle');
+        setCallerNumber('');
+        return;
+      }
+      const { queue_name } = await claimRes.json();
+      addLog(`Claimed. Dialing queue:${queue_name}...`);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const call: any = await inviteRef.current.accept({
+      const call: any = await clientInstance.dial({
+        to: `queue:${queue_name}`,
+        rootElement: audioRootRef.current ?? undefined,
         audio: true,
         video: false,
-        negotiateVideo: false,
-        rootElement: audioRootRef.current ?? undefined,
       });
       callRef.current = call;
-      inviteRef.current = null;
+      pendingRingRef.current = null;
       setCallState('active');
       addLog('Call active');
-      const from = callerNumber;
-      onCallStarted?.(call.id ?? 'call', from);
+      onCallStarted?.(call.id ?? 'call', ring.fromNumber);
 
-      // Detect remote hangup / call destroyed
       const handleCallEnded = () => {
         if (callRef.current === call) {
           callRef.current = null;
@@ -251,41 +313,42 @@ export default function Softphone({ token, projectId, host, identity, onCallStar
           onCallEnded?.();
         }
       };
-      // v3 Call Fabric fires 'destroy' when the session ends
       try { call.on('destroy', handleCallEnded); } catch { /* ignore */ }
       try { call.on('call.left', handleCallEnded); } catch { /* ignore */ }
     } catch (err) {
       console.error('Answer error:', err);
       addLog(`Answer failed: ${err instanceof Error ? err.message : err}`);
       callRef.current = null;
-      inviteRef.current = null;
+      pendingRingRef.current = null;
       setCallState('idle');
+      setCallerNumber('');
     }
-  }, [callerNumber, onCallStarted, onCallEnded, addLog]);
+  }, [onCallStarted, onCallEnded, addLog]);
 
   const hangup = useCallback(async () => {
     try {
       setCallState('ending');
-      if (inviteRef.current) {
-        addLog('Rejecting call...');
-        await inviteRef.current.reject().catch(() => {});
-        inviteRef.current = null;
+      if (pendingRingRef.current) {
+        // Decline: we simply ignore locally; other reps may still claim.
+        addLog('Declining ring (caller stays in queue)');
+        pendingRingRef.current = null;
       } else if (callRef.current) {
         addLog('Ending call...');
-        await callRef.current.end().catch(() => {});
+        await callRef.current.hangup?.().catch(() => {});
+        await callRef.current.end?.().catch(() => {});
       }
     } catch (err) {
       console.error('Hangup error:', err);
     } finally {
       callRef.current = null;
-      inviteRef.current = null;
+      pendingRingRef.current = null;
       setCallState('idle');
       setCallerNumber('');
       setMuted(false);
       setDeafened(false);
       onCallEnded?.();
     }
-  }, [onCallEnded]);
+  }, [onCallEnded, addLog]);
 
   const toggleMute = useCallback(async () => {
     if (!callRef.current) return;

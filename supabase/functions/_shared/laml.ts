@@ -68,7 +68,9 @@ export function dialClient(
   return `  <Dial ${attrs.join(' ')}>\n    <Client>${escapeXml(identity)}</Client>\n  </Dial>`;
 }
 
-/** SimRing: dial multiple identities simultaneously via <Sip> — first to answer wins. */
+/** SimRing: dial multiple identities simultaneously — first to answer wins.
+ *  When sipDomain is omitted, uses <Client> (Call Fabric websocket notification).
+ *  When sipDomain is provided, uses <Sip> routing instead. */
 export function dialMultipleClients(
   identities: Array<{ identity: string; repGreetingUrl?: string }>,
   opts: {
@@ -77,7 +79,7 @@ export function dialMultipleClients(
     action?: string;
     callerId?: string;
     timeout?: number;
-    sipDomain: string;
+    sipDomain?: string;
   }
 ): string {
   const attrs: string[] = [];
@@ -86,17 +88,29 @@ export function dialMultipleClients(
   if (opts.action) attrs.push(`action="${escapeXml(opts.action)}"`);
   if (opts.callerId) attrs.push(`callerId="${escapeXml(opts.callerId)}"`);
   if (opts.timeout) attrs.push(`timeout="${opts.timeout}"`);
-  const sipNoun = identities.map(({ identity, repGreetingUrl }) => {
-    const sipUri = `sip:${escapeXml(identity)}@${escapeXml(opts.sipDomain)}`;
-    const urlAttr = repGreetingUrl ? ` url="${escapeXml(repGreetingUrl)}"` : '';
-    return `    <Sip${urlAttr}>${sipUri}</Sip>`;
+  const nouns = identities.map(({ identity, repGreetingUrl }) => {
+    if (opts.sipDomain) {
+      const sipUri = `sip:${escapeXml(identity)}@${escapeXml(opts.sipDomain)}`;
+      const urlAttr = repGreetingUrl ? ` url="${escapeXml(repGreetingUrl)}"` : '';
+      return `    <Sip${urlAttr}>${sipUri}</Sip>`;
+    }
+    return `    <Client>${escapeXml(identity)}</Client>`;
   }).join('\n');
-  return `  <Dial ${attrs.join(' ')}>\n${sipNoun}\n  </Dial>`;
+  return `  <Dial ${attrs.join(' ')}>\n${nouns}\n  </Dial>`;
 }
 
-export function enqueue(queueName: string, waitUrl?: string): string {
-  const attrs = waitUrl ? ` waitUrl="${escapeXml(waitUrl)}"` : '';
-  return `  <Enqueue${attrs}>${escapeXml(queueName)}</Enqueue>`;
+export function enqueue(
+  queueName: string,
+  waitUrlOrOpts?: string | { waitUrl?: string; action?: string; method?: string }
+): string {
+  const opts = typeof waitUrlOrOpts === 'string'
+    ? { waitUrl: waitUrlOrOpts }
+    : (waitUrlOrOpts ?? {});
+  const attrs: string[] = [];
+  if (opts.waitUrl) attrs.push(`waitUrl="${escapeXml(opts.waitUrl)}"`);
+  if (opts.action) attrs.push(`action="${escapeXml(opts.action)}"`);
+  if (opts.method) attrs.push(`method="${opts.method}"`);
+  return `  <Enqueue${attrs.length ? ' ' + attrs.join(' ') : ''}>${escapeXml(queueName)}</Enqueue>`;
 }
 
 export function gather(
@@ -116,6 +130,28 @@ export function gather(
   if (opts.timeout) attrs.push(`timeout="${opts.timeout}"`);
   if (opts.finishOnKey) attrs.push(`finishOnKey="${opts.finishOnKey}"`);
 
+  if (innerElements.length > 0) {
+    return `  <Gather ${attrs.join(' ')}>\n${innerElements.join('\n')}\n  </Gather>`;
+  }
+  return `  <Gather ${attrs.join(' ')}/>`;
+}
+
+export function gatherSpeech(
+  opts: {
+    action: string;
+    timeout?: number;
+    speechTimeout?: string;
+    language?: string;
+  },
+  innerElements: string[] = []
+): string {
+  const attrs: string[] = [
+    `input="speech"`,
+    `action="${escapeXml(opts.action)}"`,
+    `timeout="${opts.timeout ?? 8}"`,
+    `speechTimeout="${opts.speechTimeout ?? 'auto'}"`,
+    `language="${opts.language ?? 'en-US'}"`,
+  ];
   if (innerElements.length > 0) {
     return `  <Gather ${attrs.join(' ')}>\n${innerElements.join('\n')}\n  </Gather>`;
   }

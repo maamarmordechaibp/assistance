@@ -15,6 +15,13 @@ Analyze the provided call transcript and return a JSON object with these fields:
 - ai_wasted_time_flag: true if the representative appeared to waste time, stall, use excessive filler, or drag out the call unnecessarily
 - ai_flag_reason: If ai_wasted_time_flag is true, explain why. Otherwise null.
 - ai_confidence_score: Your confidence in this analysis from 0.0 to 1.0
+- item_found: true if the rep found a specific product or resource for the customer (a URL, a product, a form link, etc.)
+- item_description: If item_found is true, a short description of what was found (e.g. "Dell Inspiron 15 laptop 12GB RAM"). Otherwise null.
+- item_price: If item_found is true and a price was mentioned, the price as a string (e.g. "$449.99"). Otherwise null.
+- item_url: If item_found is true and a URL was mentioned or implied, extract it. Otherwise null.
+- item_platform: If item_found is true, the platform or store where it was found (e.g. "Amazon", "Best Buy", "SSA.gov"). Otherwise null.
+- item_notes: If item_found is true, any useful notes about the item (availability, delivery, tips). Otherwise null.
+- item_search_terms: If item_found is true, 2-4 specific search keywords that would find this item again. Otherwise an empty array [].
 
 Be objective and fair. Flag wasted time only when there is clear evidence of unnecessary delays, excessive small talk unrelated to the task, or the rep clearly stalling.`;
 
@@ -75,7 +82,7 @@ serve(async (req) => {
         ],
         response_format: { type: 'json_object' },
         temperature: 0.3,
-        max_tokens: 1000,
+        max_tokens: 1200,
       }),
     });
 
@@ -88,7 +95,7 @@ serve(async (req) => {
       throw new Error('Incomplete analysis result from AI');
     }
 
-    // Save analysis
+    // Save analysis (includes new item_* fields)
     const { data: analysis, error } = await supabase
       .from('call_analyses')
       .upsert({ call_id: callId, ...result }, { onConflict: 'call_id' })
@@ -103,6 +110,51 @@ serve(async (req) => {
         flag_status: 'flagged',
         flag_reason: result.ai_flag_reason || 'AI detected potential wasted time',
       }).eq('id', callId);
+    }
+
+    // ── Auto-save to call_findings if a specific item was found ──
+    if (result.item_found && result.item_description) {
+      await supabase.from('call_findings').insert({
+        call_id: callId,
+        customer_id: call.customer_id || null,
+        rep_id: call.rep_id || null,
+        description: result.item_description,
+        item_url: result.item_url || null,
+        item_price: result.item_price || null,
+        item_platform: result.item_platform || null,
+        item_notes: result.item_notes || null,
+        search_terms: result.item_search_terms || [],
+        source: 'ai_auto',
+      }).then(() => {}).catch((e: unknown) => console.error('[ai-analyze] findings insert error:', e));
+    }
+
+    // ── Update customer preference profile ──
+    if (call.customer_id && result.ai_category) {
+      // Fetch current preferences
+      const { data: custData } = await supabase
+        .from('customers')
+        .select('preferences')
+        .eq('id', call.customer_id)
+        .single();
+
+      const prefs = (custData?.preferences as Record<string, unknown>) || {};
+
+      // Update last_call_category and refine typical_budget if a price was mentioned
+      const updatedPrefs: Record<string, unknown> = {
+        ...prefs,
+        last_call_category: result.ai_category,
+        last_call_date: new Date().toISOString(),
+      };
+      if (result.item_price && !prefs.typical_budget) {
+        updatedPrefs.typical_budget = result.item_price;
+      }
+
+      await supabase
+        .from('customers')
+        .update({ preferences: updatedPrefs })
+        .eq('id', call.customer_id)
+        .then(() => {})
+        .catch((e: unknown) => console.error('[ai-analyze] preferences update error:', e));
     }
 
     return new Response(JSON.stringify(analysis), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });

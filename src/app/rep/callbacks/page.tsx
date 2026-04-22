@@ -25,13 +25,18 @@ export default function RepCallbacks() {
   // makeCall is set by the parent portal page via the softphone onReady callback
   const makeCallRef = useRef<((to: string) => Promise<void>) | null>(null);
 
-  const fetchCallbacks = useCallback(async () => {
+  const fetchCallbacks = useCallback(async (retryCount = 0) => {
     setLoading(true);
     try {
       const res = await edgeFn('callbacks', { params: { status: 'pending' } });
       if (res.ok) {
         const data = await res.json();
         setCallbacks(data || []);
+      } else if (res.status === 401 && retryCount === 0) {
+        // Auth session may not be ready yet — retry once after a short delay
+        setTimeout(() => fetchCallbacks(1), 1200);
+      } else {
+        toast.error(`Failed to load callbacks (${res.status})`);
       }
     } finally {
       setLoading(false);

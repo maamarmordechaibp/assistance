@@ -21,6 +21,11 @@ import {
   X,
   UserCheck,
   UserPlus,
+  Sparkles,
+  ExternalLink,
+  BookMarked,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { edgeFn } from '@/lib/supabase/edge';
 
@@ -34,6 +39,28 @@ interface Customer {
   status: string;
 }
 
+interface IntakeBriefSuggestions {
+  search_terms?: string[];
+  platforms?: string[];
+  rep_tip?: string;
+}
+
+interface IntakeBriefFinding {
+  description: string;
+  url: string | null;
+  price: string | null;
+  platform: string | null;
+  notes: string | null;
+  found_at: string;
+}
+
+interface IntakeBrief {
+  category?: string;
+  summary: string;
+  suggestions: IntakeBriefSuggestions;
+  previous_finding: IntakeBriefFinding | null;
+}
+
 interface ActiveCall {
   id: string;
   customer_id: string | null;
@@ -41,6 +68,8 @@ interface ActiveCall {
   started_at: string;
   connected_at: string | null;
   customer?: Customer;
+  ai_intake_brief?: IntakeBrief | null;
+  ai_intake_completed?: boolean;
 }
 
 interface Credential {
@@ -70,6 +99,7 @@ export default function RepDashboard() {
   const [signalwireProjectId, setSignalwireProjectId] = useState<string | null>(null);
   const [signalwireSpaceUrl, setSignalwireSpaceUrl] = useState<string | null>(null);
   const [signalwireIdentity, setSignalwireIdentity] = useState<string | null>(null);
+  const [repId, setRepId] = useState<string | null>(null);
   const [selectedOutcome, setSelectedOutcome] = useState<string>('');
   const [extensionsUsed, setExtensionsUsed] = useState(0);
   const [maxExtensions, setMaxExtensions] = useState(2);
@@ -79,6 +109,11 @@ export default function RepDashboard() {
   const [showNameCapture, setShowNameCapture] = useState(false);
   const [newCustomerName, setNewCustomerName] = useState('');
   const [identityConfirmed, setIdentityConfirmed] = useState(false);
+  const [showLogFinding, setShowLogFinding] = useState(false);
+  const [newFinding, setNewFinding] = useState({ description: '', itemUrl: '', itemPrice: '', itemPlatform: '', itemNotes: '' });
+  const [savingFinding, setSavingFinding] = useState(false);
+  // Track previous brief to fire toast only once when it arrives
+  const prevBriefRef = useRef<IntakeBrief | null>(null);
   // makeCallFn is wired from the softphone onReady callback so other pages can use it
   const makeCallFnRef = useRef<((to: string) => Promise<void>) | null>(null);
 
@@ -94,6 +129,7 @@ export default function RepDashboard() {
         if (res.ok) {
           const data = await res.json();
           setRepStatus(data.rep?.status || 'offline');
+          if (data.rep?.id) setRepId(data.rep.id);
           if (data.webrtcToken) setWebrtcToken(data.webrtcToken);
           if (data.signalwireProjectId) setSignalwireProjectId(data.signalwireProjectId);
           if (data.signalwireSpaceUrl) setSignalwireSpaceUrl(data.signalwireSpaceUrl);
@@ -128,6 +164,21 @@ export default function RepDashboard() {
     init();
   }, []);
 
+  // Auto-refresh the SignalWire SAT token every 45 minutes (TTL is 60 min).
+  // Without this the softphone silently disconnects and calls get SIP 408.
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await edgeFn('reps-me');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.webrtcToken) setWebrtcToken(data.webrtcToken);
+        }
+      } catch { /* ignore — will retry in next interval */ }
+    }, 45 * 60 * 1000); // 45 minutes
+    return () => clearInterval(interval);
+  }, []);
+
   // Subscribe to real-time call updates
   useEffect(() => {
     const channel = supabase
@@ -142,6 +193,8 @@ export default function RepDashboard() {
             loadCustomer(call.customer_id);
           } else if (call && payload.eventType === 'UPDATE') {
             setActiveCall(call);
+            // If customer wasn't loaded yet (e.g. brief arrived before customer fetch)
+            if (call.customer_id) loadCustomer(call.customer_id);
           }
         }
       )
@@ -169,10 +222,34 @@ export default function RepDashboard() {
 
   // Stable callback — must not be inline in JSX or it recreates on every render,
   // which would tear down and restart the Relay WebSocket connection each time.
+  // Show toast when AI intake brief arrives
+  useEffect(() => {
+    const brief = activeCall?.ai_intake_brief as IntakeBrief | null | undefined;
+    if (brief && !prevBriefRef.current) {
+      toast.info(`AI Brief: ${brief.summary?.slice(0, 100)}${(brief.summary?.length ?? 0) > 100 ? '…' : ''}`, {
+        duration: 7000,
+        icon: '🤖',
+      });
+    }
+    prevBriefRef.current = brief ?? null;
+  }, [activeCall?.ai_intake_brief]);
+
+  // Pre-fill rep notes from the brief when it arrives (only if notes are empty)
+  useEffect(() => {
+    const brief = activeCall?.ai_intake_brief as IntakeBrief | null | undefined;
+    if (brief?.summary && !repNotes) {
+      setRepNotes(`[AI] ${brief.summary}`);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCall?.ai_intake_brief]);
+
   const handleCallEnded = useCallback(() => {
     setActiveCall(null);
     setCustomer(null);
     setCredentials([]);
+    setShowLogFinding(false);
+    setNewFinding({ description: '', itemUrl: '', itemPrice: '', itemPlatform: '', itemNotes: '' });
+    prevBriefRef.current = null;
   }, []);
 
   const loadCustomer = useCallback(async (customerId: string | null) => {
@@ -313,6 +390,36 @@ export default function RepDashboard() {
     }
   };
 
+  const logFinding = async () => {
+    if (!activeCall || !newFinding.description.trim()) return;
+    setSavingFinding(true);
+    try {
+      const res = await edgeFn('call-findings', {
+        method: 'POST',
+        body: JSON.stringify({
+          callId: activeCall.id,
+          customerId: customer?.id || null,
+          description: newFinding.description,
+          itemUrl: newFinding.itemUrl || undefined,
+          itemPrice: newFinding.itemPrice || undefined,
+          itemPlatform: newFinding.itemPlatform || undefined,
+          itemNotes: newFinding.itemNotes || undefined,
+        }),
+      });
+      if (res.ok) {
+        setNewFinding({ description: '', itemUrl: '', itemPrice: '', itemPlatform: '', itemNotes: '' });
+        setShowLogFinding(false);
+        toast.success('Finding saved — will be suggested in future similar calls');
+      } else {
+        toast.error('Failed to save finding');
+      }
+    } catch {
+      toast.error('Failed to save finding');
+    } finally {
+      setSavingFinding(false);
+    }
+  };
+
   const addCredential = async () => {
     if (!activeCall || !customer) return;
     if (!newCred.serviceName.trim() || !newCred.password.trim()) {
@@ -370,6 +477,9 @@ export default function RepDashboard() {
     setShowNameCapture(false);
     setIdentityConfirmed(false);
     setNewCustomerName('');
+    setShowLogFinding(false);
+    setNewFinding({ description: '', itemUrl: '', itemPrice: '', itemPlatform: '', itemNotes: '' });
+    prevBriefRef.current = null;
   };
 
   if (loading) {
@@ -585,6 +695,92 @@ export default function RepDashboard() {
                   </div>
                 )}
 
+                {/* AI Intake Brief */}
+                {activeCall?.ai_intake_brief && (
+                  <div className="bg-amber-50 rounded-lg p-4 border border-amber-200 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-5 h-5 text-amber-600" />
+                      <span className="font-semibold text-amber-900">AI Intake Brief</span>
+                      {activeCall.ai_intake_brief.category && (
+                        <span className="ml-auto text-xs bg-amber-200 text-amber-800 px-2 py-0.5 rounded-full capitalize">
+                          {activeCall.ai_intake_brief.category}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sm text-amber-800">{activeCall.ai_intake_brief.summary}</p>
+
+                    {/* Search terms — click to copy */}
+                    {(activeCall.ai_intake_brief.suggestions?.search_terms?.length ?? 0) > 0 && (
+                      <div>
+                        <p className="text-xs font-medium text-amber-700 mb-1.5">Search terms:</p>
+                        <div className="flex flex-wrap gap-1">
+                          {activeCall.ai_intake_brief.suggestions.search_terms!.map((term, i) => (
+                            <button
+                              key={i}
+                              onClick={() => { navigator.clipboard.writeText(term); toast.success('Copied!'); }}
+                              className="text-xs bg-white border border-amber-300 text-amber-800 px-2 py-0.5 rounded hover:bg-amber-100 transition"
+                              title="Click to copy"
+                            >
+                              {term}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Platforms */}
+                    {(activeCall.ai_intake_brief.suggestions?.platforms?.length ?? 0) > 0 && (
+                      <div className="flex items-center gap-2 text-xs text-amber-700">
+                        <span className="font-medium">Check:</span>
+                        {activeCall.ai_intake_brief.suggestions.platforms!.join(' · ')}
+                      </div>
+                    )}
+
+                    {/* Rep tip */}
+                    {activeCall.ai_intake_brief.suggestions?.rep_tip && (
+                      <div className="text-xs bg-amber-100 rounded p-2 text-amber-800">
+                        <span className="font-medium">Tip: </span>
+                        {activeCall.ai_intake_brief.suggestions.rep_tip}
+                      </div>
+                    )}
+
+                    {/* Previously found item */}
+                    {activeCall.ai_intake_brief.previous_finding && (
+                      <div className="bg-white rounded p-3 border border-amber-300">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <BookMarked className="w-4 h-4 text-amber-600" />
+                          <span className="text-xs font-semibold text-amber-800 uppercase tracking-wide">Previously Found</span>
+                          <span className="ml-auto text-xs text-amber-500">
+                            {new Date(activeCall.ai_intake_brief.previous_finding.found_at).toLocaleDateString()}
+                          </span>
+                        </div>
+                        <p className="text-sm font-medium">{activeCall.ai_intake_brief.previous_finding.description}</p>
+                        {activeCall.ai_intake_brief.previous_finding.price && (
+                          <p className="text-sm font-semibold text-green-700">{activeCall.ai_intake_brief.previous_finding.price}</p>
+                        )}
+                        {activeCall.ai_intake_brief.previous_finding.platform && (
+                          <p className="text-xs text-gray-500">{activeCall.ai_intake_brief.previous_finding.platform}</p>
+                        )}
+                        {activeCall.ai_intake_brief.previous_finding.url && (
+                          <a
+                            href={activeCall.ai_intake_brief.previous_finding.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 mt-1 break-all"
+                          >
+                            <ExternalLink className="w-3 h-3 flex-shrink-0" />
+                            {activeCall.ai_intake_brief.previous_finding.url.slice(0, 60)}
+                            {activeCall.ai_intake_brief.previous_finding.url.length > 60 ? '…' : ''}
+                          </a>
+                        )}
+                        {activeCall.ai_intake_brief.previous_finding.notes && (
+                          <p className="text-xs text-gray-500 mt-1">{activeCall.ai_intake_brief.previous_finding.notes}</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Call Notes */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -664,6 +860,69 @@ export default function RepDashboard() {
                     +{extensionMinutes} min
                   </button>
                 </div>
+
+                {/* Log Item Found */}
+                {showLogFinding ? (
+                  <div className="p-3 bg-green-50 rounded-lg border border-green-200 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-green-800 flex items-center gap-1.5">
+                        <BookMarked className="w-4 h-4" />
+                        Log Item Found
+                      </span>
+                      <button onClick={() => setShowLogFinding(false)} className="text-gray-400 hover:text-gray-600">
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <input
+                      placeholder="What was found? (e.g. Dell Inspiron 15 laptop)"
+                      value={newFinding.description}
+                      onChange={(e) => setNewFinding(p => ({ ...p, description: e.target.value }))}
+                      className="w-full rounded border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                    />
+                    <input
+                      placeholder="URL (optional)"
+                      value={newFinding.itemUrl}
+                      onChange={(e) => setNewFinding(p => ({ ...p, itemUrl: e.target.value }))}
+                      className="w-full rounded border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        placeholder="Price (e.g. $449)"
+                        value={newFinding.itemPrice}
+                        onChange={(e) => setNewFinding(p => ({ ...p, itemPrice: e.target.value }))}
+                        className="rounded border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                      />
+                      <input
+                        placeholder="Platform (e.g. Amazon)"
+                        value={newFinding.itemPlatform}
+                        onChange={(e) => setNewFinding(p => ({ ...p, itemPlatform: e.target.value }))}
+                        className="rounded border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                      />
+                    </div>
+                    <input
+                      placeholder="Notes (optional)"
+                      value={newFinding.itemNotes}
+                      onChange={(e) => setNewFinding(p => ({ ...p, itemNotes: e.target.value }))}
+                      className="w-full rounded border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                    />
+                    <button
+                      onClick={logFinding}
+                      disabled={!newFinding.description.trim() || savingFinding}
+                      className="w-full bg-green-600 text-white rounded py-1.5 text-sm font-medium hover:bg-green-700 transition disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                      {savingFinding ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                      Save Finding
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setShowLogFinding(true)}
+                    className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg border-2 border-dashed border-gray-300 text-sm text-gray-500 hover:border-green-400 hover:text-green-600 transition"
+                  >
+                    <BookMarked className="w-4 h-4" />
+                    Log Item Found
+                  </button>
+                )}
               </div>
             ) : (
               <div className="text-center py-12 text-gray-500">
@@ -687,6 +946,7 @@ export default function RepDashboard() {
               projectId={signalwireProjectId}
               host={signalwireSpaceUrl}
               identity={signalwireIdentity}
+              repId={repId}
               onCallEnded={handleCallEnded}
               onReady={(makeCall) => {
                 makeCallFnRef.current = makeCall;

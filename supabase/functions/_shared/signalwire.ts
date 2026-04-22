@@ -75,22 +75,88 @@ export function toSwIdentity(email: string): string {
   return email.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
-export async function createWebRtcToken(identity: string) {
+/** Derive a stable synthetic email and password for a SignalWire Call Fabric
+ *  subscriber from its identity. We never send auth emails to these addresses —
+ *  they exist only so the Fabric API has the required credential fields. */
+function subscriberCreds(identity: string): { reference: string; email: string; password: string } {
   const reference = toSwIdentity(identity);
+  // `reference` is what we pass to the /subscribers/tokens endpoint; it "often is an email"
+  // so we use the synthetic email directly as the reference to guarantee both
+  // endpoints key off the SAME subscriber record.
+  const email = `${reference}@webrtc.local`;
+  // Deterministic password so repeated calls don't shuffle it. 32 chars of hex
+  // derived from identity is within the 8–72 char limit SignalWire requires.
+  // (The password lives only in SW; the browser never sees it — the SAT JWT is
+  // how the SDK authenticates.)
+  const password = `pw_${reference}_webrtc_register_ok`.slice(0, 72);
+  return { reference: email, email, password };
+}
+
+/** Idempotently create the Call Fabric Subscriber resource.
+ *  POST /api/fabric/resources/subscribers requires `email` (the primary id);
+ *  it does NOT accept a `reference` field. Calling the tokens endpoint alone
+ *  auto-provisions a subscriber keyed by `reference` but with no password set,
+ *  which causes `.online()` in the browser SDK to fail with
+ *  -32603 "WebRTC endpoint registration failed". */
+export async function ensureSubscriber(email: string, password: string): Promise<{ id?: string; created: boolean; error?: string }> {
   const spaceUrl = getSpaceUrl();
   const auth = getAuthHeader();
 
-  // Issue a Call Fabric SAT (Subscriber Access Token) via the fabric API.
-  // The SAT's 'ch' (channel) field encodes the WebSocket endpoint (puc.signalwire.com)
-  // so the v3 SignalWire() client connects to the right host automatically.
-  // reference = the Client name in LaML <Dial><Client>reference</Client>.
+  // Look up existing subscriber by email (the real primary key on this endpoint).
+  try {
+    const listRes = await fetch(`https://${spaceUrl}/api/fabric/resources/subscribers?email=${encodeURIComponent(email)}`, {
+      headers: { Authorization: auth },
+    });
+    if (listRes.ok) {
+      const listData = await listRes.json();
+      const existing = Array.isArray(listData?.data)
+        ? listData.data.find((s: { email?: string }) => s.email === email)
+        : null;
+      if (existing) return { id: existing.id, created: false };
+    }
+  } catch { /* fall through to create */ }
+
+  const createRes = await fetch(`https://${spaceUrl}/api/fabric/resources/subscribers`, {
+    method: 'POST',
+    headers: { Authorization: auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!createRes.ok) {
+    const text = await createRes.text().catch(() => '');
+    // 422 is returned if the email already exists — treat as success.
+    if (createRes.status === 422) return { created: false, error: undefined };
+    return { created: false, error: `HTTP ${createRes.status}: ${text}` };
+  }
+  const created = await createRes.json();
+  return { id: created.id, created: true };
+}
+
+export async function createWebRtcToken(identity: string) {
+  const { reference, email, password } = subscriberCreds(identity);
+  const spaceUrl = getSpaceUrl();
+  const auth = getAuthHeader();
+
+  // 1) Make sure the subscriber resource exists with a password set.
+  const ensure = await ensureSubscriber(email, password);
+  if (ensure.error) {
+    console.error(`[signalwire] ensureSubscriber(${email}) failed:`, ensure.error);
+  } else {
+    console.log(`[signalwire] subscriber ${email} ${ensure.created ? 'created' : 'exists'} (id=${ensure.id ?? '?'})`);
+  }
+
+  // 2) Issue a Call Fabric SAT (Subscriber Access Token).
+  //    We pass `password` again so the field is kept in sync even if the
+  //    subscriber was auto-provisioned by an earlier version of this code
+  //    without a password — which is what caused the -32603 storm.
+  //    `reference` here == the subscriber's email so the tokens endpoint
+  //    resolves to the SAME record we just created above.
   const res = await fetch(`https://${spaceUrl}/api/fabric/subscribers/tokens`, {
     method: 'POST',
     headers: { Authorization: auth, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ reference, ttl: 3600 }),
+    body: JSON.stringify({ reference, password }),
   });
   const data = await res.json();
-  // Returns { subscriber_id, token } — we return token as jwt_token for compat
+  console.log(`[signalwire] token issued for subscriber_id=${data.subscriber_id}`);
   return { jwt_token: data.token, subscriber_id: data.subscriber_id, ...data };
 }
 

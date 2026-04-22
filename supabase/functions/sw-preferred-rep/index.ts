@@ -2,7 +2,7 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
 import * as laml from '../_shared/laml.ts';
-import { toSwIdentity } from '../_shared/signalwire.ts';
+import { enqueueCaller } from '../_shared/callQueue.ts';
 
 serve(async (req) => {
   if (req.method !== 'POST') {
@@ -21,12 +21,13 @@ serve(async (req) => {
 
   if (!customerId) {
     elements.push(laml.say('Unable to determine your account. Connecting you to a representative.'));
-    elements.push(laml.enqueue('main-queue', `${baseUrl}/sw-queue-wait`));
+    elements.push(await enqueueCaller({ callSid: '', from: from || '', baseUrl }));
     return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
   }
 
   const formData = step === 'fallback' ? null : await req.formData();
   const from = formData?.get('From') as string | null;
+  const callSid = (formData?.get('CallSid') as string | null) || '';
 
   if (step === 'dial') {
     // Find the preferred rep or last rep for this customer
@@ -53,7 +54,7 @@ serve(async (req) => {
 
     if (!repId) {
       elements.push(laml.say('We do not have a previous representative on file for you. Connecting you to the next available representative.'));
-      elements.push(laml.enqueue('main-queue', `${baseUrl}/sw-queue-wait`));
+      elements.push(await enqueueCaller({ callSid, from: from || '', customerId, baseUrl }));
       return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
     }
 
@@ -67,19 +68,15 @@ serve(async (req) => {
     if (!rep || rep.status !== 'available') {
       const name = rep?.full_name || 'Your preferred representative';
       elements.push(laml.say(`${name} is not available right now. Connecting you to the next available representative.`));
-      elements.push(laml.enqueue('main-queue', `${baseUrl}/sw-queue-wait`));
+      elements.push(await enqueueCaller({ callSid, from: from || '', customerId, baseUrl }));
       return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
     }
 
-    // Dial the rep's WebRTC client (identity = sanitized email, matching the JWT resource)
+    // Park the caller in this rep's per-rep queue; their browser sees the row
+    // via Supabase Realtime and can Answer to bridge.
     elements.push(laml.say(`Connecting you to ${rep.full_name}. Please hold.`));
-    elements.push(laml.dialClient(toSwIdentity(rep.email), {
-      record: true,
-      timeLimit: 3600,
-      timeout: 30,
-      callerId: from || undefined,
-      action: `${baseUrl}/sw-preferred-rep?step=fallback&customerId=${customerId}`,
-      sipDomain: Deno.env.get('SIGNALWIRE_SPACE_URL'),
+    elements.push(await enqueueCaller({
+      callSid, from: from || '', customerId, targetRepId: rep.id, baseUrl,
     }));
 
     return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
@@ -96,13 +93,13 @@ serve(async (req) => {
     } else {
       // Rep didn't answer — fall back to queue
       elements.push(laml.say('Your representative did not answer. Connecting you to the next available representative.'));
-      elements.push(laml.enqueue('main-queue', `${baseUrl}/sw-queue-wait`));
+      elements.push(await enqueueCaller({ callSid: '', from: '', customerId, baseUrl }));
     }
 
     return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
   }
 
   // Default fallback
-  elements.push(laml.enqueue('main-queue', `${baseUrl}/sw-queue-wait`));
+  elements.push(await enqueueCaller({ callSid: '', from: '', customerId, baseUrl }));
   return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
 });
