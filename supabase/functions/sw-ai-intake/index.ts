@@ -22,9 +22,29 @@ const OPT_OUT_KEYWORDS = [
   'human', 'operator', 'real person', 'speak to someone',
 ];
 
-// Used ONLY for generating a short clarifying question when the caller's answer is too vague (< 3 words)
-const QUESTION_PROMPT = `You are a warm phone intake assistant. Generate ONE short question (under 15 words) to clarify what the caller needs.
-Respond with valid JSON only: {"question": "your short question here"}`;
+// Conversational intake prompt. GPT decides each turn whether it has enough
+// context to hand off to a rep, or needs to ask a natural follow-up.
+// Offline covers: shopping, bill payments, account help, form support, and
+// general online task assistance — NOT shopping only.
+const TURN_PROMPT = `You are a warm, human-sounding phone intake assistant for Offline — a live support service that helps customers with online tasks like shopping, bill payments, account assistance, and filling out forms.
+
+YOUR JOB: Carry a natural, human conversation to understand exactly what the caller needs BEFORE we hand them to a live representative.
+
+CRITICAL RULES:
+- Use common sense. If the caller trails off mid-sentence (for example "I want to fill out…"), ASK what they want to fill out — do NOT assume they're done.
+- Ask ONE short follow-up at a time (under 15 words). Sound like a real person, not a form.
+- Keep gathering details until you have BOTH: (a) the task type and (b) enough specifics that a representative could start working immediately.
+- Typical specifics to gather depending on the task:
+  • Shopping → item, budget, brand/size/color preferences
+  • Bill payment → which biller, approximate amount, payment method
+  • Account help → which website/service, what needs changing
+  • Form / application → which form (name or purpose), any deadline
+- Don't over-interrogate. 1–3 follow-ups is usually enough. If the caller sounds frustrated or repeats themselves, finish.
+- If the caller asks for a person / representative / agent at any point, set done=true immediately.
+
+OUTPUT FORMAT — respond with valid JSON ONLY in one of these two shapes:
+1. Need more info → {"done": false, "question": "your short natural follow-up question"}
+2. Enough info → {"done": true, "summary": "one-sentence summary of what the caller needs"}`;
 
 // Used by generateBrief() with gpt-4o for high-quality shopping expertise
 const BRIEF_PROMPT = `You are an expert personal shopping assistant with deep product knowledge. Generate a concise shopping brief for a human representative based on what the customer said.
@@ -119,9 +139,11 @@ serve(async (req) => {
     );
   }
 
-  // ── Helper: ask one clarifying question (gpt-4o-mini, only when answer is too vague) ──
-  async function callGptQuestion(msgs: Message[]): Promise<string> {
-    const payload = [{ role: 'system', content: QUESTION_PROMPT }, ...msgs];
+  // ── Helper: run one conversational turn — GPT returns either a follow-up
+  //   question or { done:true, summary } when it has enough context. ──
+  type TurnResult = { done: false; question: string } | { done: true; summary: string };
+  async function callGptTurn(msgs: Message[]): Promise<TurnResult> {
+    const payload = [{ role: 'system', content: TURN_PROMPT }, ...msgs];
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
@@ -130,12 +152,19 @@ serve(async (req) => {
         messages: payload,
         response_format: { type: 'json_object' },
         temperature: 0.3,
-        max_tokens: 80,
+        max_tokens: 120,
       }),
     });
     const data = await res.json();
-    const result = JSON.parse(data.choices?.[0]?.message?.content || '{"question":"What item are you looking for today?"}');
-    return result.question || 'What item are you looking for today?';
+    const raw = data.choices?.[0]?.message?.content || '{"done":false,"question":"Could you tell me a bit more about what you need today?"}';
+    const parsed = JSON.parse(raw);
+    if (parsed.done === true) {
+      return { done: true, summary: String(parsed.summary || '').slice(0, 300) };
+    }
+    return {
+      done: false,
+      question: String(parsed.question || 'Could you tell me a bit more about what you need today?').slice(0, 200),
+    };
   }
 
   // ── Helper: generate expert shopping brief (gpt-4o — full model with product knowledge) ──
@@ -209,9 +238,10 @@ serve(async (req) => {
       'Ask a warm, brief opening question to understand what they need today.',
     ].filter(Boolean).join(' ');
 
-    let firstQuestion = 'What can I help you find today?';
+    let firstQuestion = 'How can we help you today?';
     try {
-      firstQuestion = await callGptQuestion([{ role: 'user', content: initUserMsg }]);
+      const first = await callGptTurn([{ role: 'user', content: initUserMsg }]);
+      if (!first.done) firstQuestion = first.question;
     } catch { /* use default */ }
 
     // Seed the context with the first assistant message
@@ -227,7 +257,7 @@ serve(async (req) => {
         : `Welcome back, ${customerName}.`
       : 'Welcome.';
 
-    const opening = `${greeting} Before connecting you, our assistant will ask a couple of quick questions so your representative knows exactly what you need — saving time on your call. You can say "representative" at any time to connect right away.`;
+    const opening = `${greeting} Before connecting you, I'll ask a couple of quick questions so your representative knows exactly what you need. You can say "representative" at any time to connect right away.`;
 
     return new Response(
       laml.buildLamlResponse([
@@ -268,11 +298,17 @@ serve(async (req) => {
   // Append customer's spoken answer to context
   messages.push({ role: 'user', content: speechResult });
 
-  // ── CODE decides when to stop — NOT GPT ──────────────────────────────────────
-  // If caller gave 3+ words (substantive answer) OR we're already on turn 2+,
-  // immediately generate the brief. This prevents any looping regardless of model behavior.
-  const wordCount = speechResult.trim().split(/\s+/).filter((w: string) => w.length > 0).length;
-  const shouldFinishNow = turn >= 2 || wordCount >= 3;
+  // ── GPT decides when we have enough info. Hard cap at MAX_TURNS so we never
+  //    loop forever. ──────────────────────────────────────────────────────────
+  let turnResult: TurnResult;
+  try {
+    turnResult = await callGptTurn(messages);
+  } catch (err) {
+    console.error('[sw-ai-intake] callGptTurn error:', err);
+    // On error, finish up and hand off rather than re-prompting indefinitely.
+    turnResult = { done: true, summary: speechResult };
+  }
+  const shouldFinishNow = turnResult.done || turn >= MAX_TURNS - 1;
 
   // Shared helper: look up past findings + build full brief + transfer to rep
   async function finishWithBrief(doneResult: GptDoneResult): Promise<Response> {
@@ -329,14 +365,8 @@ serve(async (req) => {
     return await finishWithBrief(doneResult);
   }
 
-  // Only reaches here when answer had < 3 words (e.g. "help", "shopping") AND turn=1
-  // Ask exactly ONE clarifying question using gpt-4o-mini, then finish next turn regardless
-  let nextQuestion: string;
-  try {
-    nextQuestion = await callGptQuestion(messages);
-  } catch {
-    nextQuestion = 'What specific item are you looking for today?';
-  }
+  // Not done yet — ask the follow-up question GPT produced and continue.
+  const nextQuestion = (turnResult as { done: false; question: string }).question;
   messages.push({ role: 'assistant', content: JSON.stringify({ done: false, question: nextQuestion }) });
 
   const newCtx = encodeCtx(messages);
