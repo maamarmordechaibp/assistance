@@ -367,33 +367,32 @@ serve(async (req) => {
     const elements: string[] = [];
 
     switch (digits) {
-      case '1': { // Route through AI intake before connecting to rep
-        elements.push(laml.redirect(`${baseUrl}/sw-ai-intake?customerId=${customerId}`));
-        break;
-      }
-
-      case '0': // Dial by extension
-        elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=extension&customerId=${customerId}`));
+      case '0': // Live Agent submenu
+        elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=agent-menu&customerId=${customerId}`));
         break;
 
-      case '2': // Buy minutes
-        elements.push(laml.redirect(`${baseUrl}/sw-package-select?customerId=${customerId}`));
+      case '1': // Company information
+        elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=company-info&customerId=${customerId}`));
         break;
 
-      case '3': // Terms & conditions
-        elements.push(laml.redirect(`${baseUrl}/sw-terms?customerId=${customerId}`));
+      case '2': // Balance & minutes submenu
+        elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=balance-menu&customerId=${customerId}`));
         break;
 
-      case '4': // Account lookup from different phone
-        elements.push(laml.redirect(`${baseUrl}/sw-account-lookup?customerId=${customerId}`));
+      case '3': // Account update submenu
+        elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=account-menu&customerId=${customerId}`));
         break;
 
-      case '5': // Preferred / last representative
-        elements.push(laml.redirect(`${baseUrl}/sw-preferred-rep?customerId=${customerId}`));
+      case '4': // Yiddish admin office voicemail
+        elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=voicemail-yiddish&customerId=${customerId}`));
         break;
 
-      case '6': // Low-balance choice: 1=buy, 2=continue
-        elements.push(laml.redirect(`${baseUrl}/sw-package-select?customerId=${customerId}`));
+      case '7': // Terms & security submenu
+        elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=terms-menu&customerId=${customerId}`));
+        break;
+
+      case '9': // Replay main menu
+        elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
         break;
 
       default:
@@ -402,6 +401,187 @@ serve(async (req) => {
     }
 
     return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+  }
+
+  // ── 0) Live Agent submenu ──
+  if (step === 'agent-menu' && customerId) {
+    const elements: string[] = [];
+    if (!digits) {
+      elements.push(laml.gather(
+        { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=agent-menu&customerId=${customerId}`, timeout: 10 },
+        laml.sayLines([
+          'To speak with the next available agent, press 1.',
+          'To connect with a specific extension, press 2.',
+          'To reconnect with the agent from your most recent call, press 3.',
+          'To return to the main menu, press star.',
+        ])
+      ));
+      elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
+      return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+    }
+    switch (digits) {
+      case '1': // next available agent via AI intake
+        elements.push(laml.redirect(`${baseUrl}/sw-ai-intake?customerId=${customerId}`));
+        break;
+      case '2': // specific extension
+        elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=extension&customerId=${customerId}`));
+        break;
+      case '3': // last agent reconnect
+        elements.push(laml.redirect(`${baseUrl}/sw-preferred-rep?customerId=${customerId}`));
+        break;
+      case '*':
+      default:
+        elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
+        break;
+    }
+    return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+  }
+
+  // ── 1) Company Information ──
+  if (step === 'company-info' && customerId) {
+    const elements = [
+      ...laml.sayLines([
+        'You have reached Offline, a live phone support service that helps customers with online tasks — including shopping, bill payments, account assistance, and form support.',
+      ]),
+      laml.gather(
+        { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=return-main&customerId=${customerId}`, timeout: 6 },
+        [laml.say('To return to the main menu, press star.')]
+      ),
+      laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`),
+    ];
+    return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+  }
+
+  // ── 2) Balance & Minutes submenu ──
+  if (step === 'balance-menu' && customerId) {
+    const elements: string[] = [];
+    if (!digits) {
+      elements.push(laml.gather(
+        { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=balance-menu&customerId=${customerId}`, timeout: 10 },
+        laml.sayLines([
+          'To hear your current minute balance, press 1.',
+          'To add more minutes to your account, press 2.',
+          'To return to the main menu, press star.',
+        ])
+      ));
+      elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
+      return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+    }
+    if (digits === '1') {
+      const { data: customer } = await supabase.from('customers').select('current_balance_minutes').eq('id', customerId).single();
+      const mins = customer?.current_balance_minutes ?? 0;
+      elements.push(laml.say(formatMinuteAnnouncement(mins, 'You currently have {minutes} minutes remaining.')));
+      elements.push(laml.pause(1));
+      elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
+    } else if (digits === '2') {
+      elements.push(laml.redirect(`${baseUrl}/sw-package-select?customerId=${customerId}`));
+    } else {
+      elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
+    }
+    return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+  }
+
+  // ── 3) Account Update submenu ──
+  if (step === 'account-menu' && customerId) {
+    const elements: string[] = [];
+    if (!digits) {
+      elements.push(laml.gather(
+        { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=account-menu&customerId=${customerId}`, timeout: 10 },
+        laml.sayLines([
+          'To update your account information, press 1.',
+          'To securely save your credit card details for future use, press 2.',
+          'To return to the main menu, press star.',
+        ])
+      ));
+      elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
+      return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+    }
+    if (digits === '1') {
+      elements.push(laml.redirect(`${baseUrl}/sw-account-lookup?customerId=${customerId}`));
+    } else if (digits === '2') {
+      elements.push(laml.redirect(`${baseUrl}/sw-payment-gather?customerId=${customerId}&mode=save`));
+    } else {
+      elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
+    }
+    return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+  }
+
+  // ── 4) Yiddish admin office voicemail ──
+  if (step === 'voicemail-yiddish' && customerId) {
+    const elements = [
+      ...laml.sayLines([
+        'Please leave your message for the Yiddish admin office after the tone.',
+        'Be sure to include your name, phone number, and the reason for your call.',
+      ]),
+      laml.record({
+        action: `${baseUrl}/sw-inbound?step=voicemail-complete&customerId=${customerId}&mailbox=yiddish`,
+        maxLength: 180,
+        transcribe: true,
+        transcribeCallback: `${baseUrl}/sw-transcription?mailbox=yiddish&customerId=${customerId}`,
+      }),
+      ...laml.sayLines([
+        'Thank you for calling Offline.',
+        'We appreciate your call and look forward to assisting you.',
+      ]),
+      laml.hangup(),
+    ];
+    return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+  }
+
+  if (step === 'voicemail-complete' && customerId) {
+    const elements = [
+      ...laml.sayLines([
+        'Your message has been received.',
+        'Thank you for calling Offline. Goodbye.',
+      ]),
+      laml.hangup(),
+    ];
+    return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+  }
+
+  // ── 7) Terms & Security submenu ──
+  if (step === 'terms-menu' && customerId) {
+    const elements: string[] = [];
+    if (!digits) {
+      elements.push(laml.gather(
+        { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=terms-menu&customerId=${customerId}`, timeout: 10 },
+        laml.sayLines([
+          'To hear our terms and conditions, press 1.',
+          'To hear our security measures, press 2.',
+          'To return to the main menu, press star.',
+        ])
+      ));
+      elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
+      return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+    }
+    if (digits === '1') {
+      elements.push(laml.redirect(`${baseUrl}/sw-terms?customerId=${customerId}`));
+    } else if (digits === '2') {
+      elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=security-measures&customerId=${customerId}`));
+    } else {
+      elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
+    }
+    return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+  }
+
+  if (step === 'security-measures' && customerId) {
+    const elements = [
+      ...laml.sayLines([
+        'At Offline, your security is our priority.',
+        'All calls are recorded on encrypted servers for quality and training.',
+        'Credit card details are captured through a secure PCI-compliant system and never shared with our agents.',
+        'Account credentials are stored in a zero-knowledge vault and are only unlocked for the duration of your active call.',
+      ]),
+      laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`),
+    ];
+    return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+  }
+
+  if (step === 'return-main' && customerId) {
+    return new Response(
+      laml.buildLamlResponse([laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`)]),
+      { headers: { 'Content-Type': 'application/xml' } }
+    );
   }
 
   // ── Low-balance proactive choice (before main menu) ──
@@ -478,9 +658,17 @@ serve(async (req) => {
 
     const isNewCaller = customer.full_name.startsWith('Caller ');
     if (isNewCaller) {
-      elements.push(laml.say('Welcome to CallVault.'));
+      // Main Greeting — natural cadence via short lines with brief pauses
+      elements.push(...laml.sayLines([
+        'Thank you for calling Offline.',
+        "Stay offline — we'll handle the online.",
+        'Please listen carefully and select from the following options.',
+      ]));
     } else {
-      elements.push(laml.say(`Welcome back, ${customer.full_name}.`));
+      elements.push(...laml.sayLines([
+        `Welcome back, ${customer.full_name}.`,
+        "Stay offline — we'll handle the online.",
+      ]));
     }
 
     if (announcementEnabled) {
@@ -525,7 +713,7 @@ serve(async (req) => {
       call_sid: callSid,
       started_at: new Date().toISOString(),
     });
-    elements.push(laml.say('Welcome to CallVault. Connecting you to a representative.'));
+    elements.push(laml.say('Welcome to Offline. Connecting you to a representative.'));
     elements.push(laml.pause(1));
     elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=connect-rep&customerId=`));
   }
@@ -534,21 +722,19 @@ serve(async (req) => {
   return new Response(xml, { headers: { 'Content-Type': 'application/xml' } });
 });
 
-// ── Helper: build the <Gather> for the main menu ──
+// ── Helper: build the <Gather> for the main menu (Offline IVR spec) ──
 function buildMenuGather(baseUrl: string, customer: { id: string; preferred_rep_id?: string | null; current_balance_minutes: number }): string {
-  const lines: string[] = [];
-  lines.push('Press 1 to speak with the next available representative.');
-  lines.push('Press 0 to reach a specific representative by extension.');
-  lines.push('Press 2 to purchase minutes.');
-  lines.push('Press 3 to hear our terms and conditions.');
-  lines.push('Press 4 if you are calling from a different phone number.');
-  if (customer.preferred_rep_id) {
-    lines.push('Press 5 to request your preferred representative.');
-  }
-
+  const lines: string[] = [
+    'To connect with a live agent, press 0.',
+    'For company information, press 1.',
+    'To hear your balance or add more minutes, press 2.',
+    'To update your information or securely save your credit card details, press 3.',
+    'To leave a message for the Yiddish admin office, press 4.',
+    'To hear our terms, conditions, and security measures, press 7.',
+  ];
   return laml.gather(
     { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=menu&customerId=${customer.id}`, timeout: 10 },
-    [laml.say(lines.join(' '))]
+    laml.sayLines(lines)
   );
 }
 

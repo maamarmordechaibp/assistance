@@ -4,8 +4,43 @@ export function buildLamlResponse(elements: string[]): string {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n${elements.join('\n')}\n</Response>`;
 }
 
-export function say(text: string, voice = 'Polly.Matthew'): string {
+// Default to an Amazon Polly Neural voice — much more natural / human-sounding
+// than the legacy standard voices. SignalWire exposes these via the same
+// `Polly.<Name>-Neural` naming convention Twilio uses.
+export function say(text: string, voice = 'Polly.Joanna-Neural'): string {
   return `  <Say voice="${voice}">${escapeXml(text)}</Say>`;
+}
+
+/** Speak multiple lines with short natural pauses between them so the delivery
+ *  doesn't sound like one long run-on sentence. Returns an array of LaML verbs
+ *  so the caller can spread them into their elements list. */
+export function sayLines(lines: string[], voice = 'Polly.Joanna-Neural'): string[] {
+  const out: string[] = [];
+  lines.forEach((line, idx) => {
+    out.push(say(line, voice));
+    if (idx < lines.length - 1) out.push(pause(1));
+  });
+  return out;
+}
+
+export function record(opts: {
+  action?: string;
+  maxLength?: number;
+  finishOnKey?: string;
+  playBeep?: boolean;
+  transcribe?: boolean;
+  transcribeCallback?: string;
+} = {}): string {
+  const attrs: string[] = [];
+  if (opts.action) attrs.push(`action="${escapeXml(opts.action)}"`);
+  attrs.push(`maxLength="${opts.maxLength ?? 120}"`);
+  attrs.push(`finishOnKey="${opts.finishOnKey ?? '#'}"`);
+  attrs.push(`playBeep="${opts.playBeep !== false}"`);
+  if (opts.transcribe) {
+    attrs.push('transcribe="true"');
+    if (opts.transcribeCallback) attrs.push(`transcribeCallback="${escapeXml(opts.transcribeCallback)}"`);
+  }
+  return `  <Record ${attrs.join(' ')}/>`;
 }
 
 export function play(url: string): string {
