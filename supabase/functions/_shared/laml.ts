@@ -7,20 +7,20 @@ export function buildLamlResponse(elements: string[]): string {
 // Default to an Amazon Polly Neural voice — much more natural / human-sounding
 // than the legacy standard voices. SignalWire exposes these via the same
 // `Polly.<Name>-Neural` naming convention Twilio uses.
-export function say(text: string, voice = 'Polly.Joanna-Neural'): string {
+export function say(text: string, voice = 'Polly.Matthew-Neural'): string {
   return `  <Say voice="${voice}">${escapeXml(text)}</Say>`;
 }
 
-/** Speak multiple lines with short natural pauses between them so the delivery
- *  doesn't sound like one long run-on sentence. Returns an array of LaML verbs
- *  so the caller can spread them into their elements list. */
-export function sayLines(lines: string[], voice = 'Polly.Joanna-Neural'): string[] {
-  const out: string[] = [];
-  lines.forEach((line, idx) => {
-    out.push(say(line, voice));
-    if (idx < lines.length - 1) out.push(pause(1));
-  });
-  return out;
+/** Speak multiple lines as ONE continuous utterance so the Neural voice's
+ *  prosody engine handles pacing naturally (no robotic pauses between
+ *  sentences). Returns a single-element array so callers can spread into
+ *  their elements list. */
+export function sayLines(lines: string[], voice = 'Polly.Matthew-Neural'): string[] {
+  const joined = lines
+    .map(l => l.trim())
+    .filter(Boolean)
+    .join(' ');
+  return [say(joined, voice)];
 }
 
 export function record(opts: {
