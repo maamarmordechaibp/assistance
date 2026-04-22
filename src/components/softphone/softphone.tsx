@@ -238,9 +238,6 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
     };
   }, [repId, addLog]);
 
-    return () => { supabase.removeChannel(channel).catch(() => {}); };
-  }, [repId, addLog]);
-
 
   // Duration timer
   useEffect(() => {
