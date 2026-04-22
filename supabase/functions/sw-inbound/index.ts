@@ -68,11 +68,11 @@ serve(async (req) => {
   }
 
   // ── Connect claimed rep: invoked by REST Update-Call from call-claim.
-  //    Strategy: put the caller into a Conference room (LaML), and in
-  //    parallel originate a REST call to the rep's Call Fabric subscriber
-  //    whose answer URL returns LaML that joins the same conference. Both
-  //    legs meet in the room. This works from a LaML Compatibility handler
-  //    because we never rely on SWML verbs. ──
+  //    Strategy: return LaML <Dial><Sip>sip:<identity>@<sipDomain></Sip></Dial>
+  //    directly to the caller. SignalWire routes the SIP INVITE to the
+  //    rep's Call Fabric subscriber registration (the SDK's online()
+  //    handler receives it and auto-answers). This is the simplest working
+  //    bridge from a LaML Compatibility handler. ──
   if (step === 'connect-claimed-rep') {
     const identity = url.searchParams.get('identity');
     const queueId = url.searchParams.get('queueId');
@@ -93,60 +93,25 @@ serve(async (req) => {
         .catch(() => {});
     }
 
-    // Unique room name. queueId is already unique per call.
-    const roomName = `conf-${queueId || callSid}`;
+    const sipDomain = Deno.env.get('SIGNALWIRE_SIP_DOMAIN') || 'accuinfo.signalwire.com';
     const fromNumber = Deno.env.get('SIGNALWIRE_FROM_NUMBER') || '+18459357587';
 
-    // Kick off the rep-leg origination in the background so we return the
-    // caller's LaML immediately. We originate TO the Fabric address so the
-    // browser SDK receives the invite via its existing online() handler.
-    const repJoinUrl = `${baseUrl}/sw-inbound?step=rep-conference-join&room=${encodeURIComponent(roomName)}&callerFrom=${encodeURIComponent(from || '')}`;
-    (async () => {
-      try {
-        // Lazy-import to avoid circular / header issues
-        const { createCall } = await import('../_shared/signalwire.ts');
-        // Try the Call Fabric address path first (no + prefix, starts with /).
-        const fabricAddress = `/private/${identity}`;
-        const result = await createCall({
-          to: fabricAddress,
-          from: fromNumber,
-          url: repJoinUrl,
-          statusCallback: `${baseUrl}/sw-inbound?step=rep-leg-status&room=${encodeURIComponent(roomName)}`,
-        });
-        console.log('[sw-inbound] rep-leg createCall result:', JSON.stringify(result));
-        await supabase.from('call_traces').insert({
-          call_sid: callSid,
-          step: 'rep-leg-originate',
-          from_number: from,
-          details: { room: roomName, identity, result },
-        }).catch(() => {});
-      } catch (err) {
-        console.error('[sw-inbound] rep-leg createCall failed:', err);
-      }
-    })();
-
-    // Caller LaML: join the conference with hold music while the rep
-    // leg is being originated. endConferenceOnExit=true on the caller so
-    // when the caller hangs up, the room tears down.
     const elements = [
       laml.say('Connecting you to your representative now. Please hold.'),
-      laml.dialConference(roomName, {
-        startConferenceOnEnter: false,
-        endConferenceOnExit: true,
-        waitUrl: '',
-        beep: false,
+      laml.dialClient(identity, {
+        sipDomain,
+        timeout: 45,
         timeLimit: 14400,
-        statusCallback: `${baseUrl}/sw-inbound?step=queue-exit&queueId=${queueId ?? ''}`,
+        callerId: from || fromNumber,
+        record: true,
+        action: `${baseUrl}/sw-inbound?step=queue-exit&queueId=${queueId ?? ''}`,
       }),
       laml.hangup(),
     ];
     return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
   }
 
-  // ── Rep conference join: URL the rep's subscriber hits when their
-  //    browser auto-answers the originated call. Returns LaML joining the
-  //    conference room. startConferenceOnEnter=true so the room "opens"
-  //    as soon as the rep is in. ──
+  // ── Rep conference join (unused — kept for reference) ──
   if (step === 'rep-conference-join') {
     const room = url.searchParams.get('room');
     const callerFrom = url.searchParams.get('callerFrom') || '';
