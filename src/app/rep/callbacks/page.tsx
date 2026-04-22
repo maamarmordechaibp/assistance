@@ -160,7 +160,7 @@ export default function RepCallbacks() {
           )}
         </h2>
         <button
-          onClick={fetchCallbacks}
+          onClick={() => fetchCallbacks()}
           className="flex items-center gap-1 px-4 py-2 bg-gray-100 rounded-lg text-sm font-medium hover:bg-gray-200 transition"
         >
           <RefreshCw className="w-4 h-4" />
