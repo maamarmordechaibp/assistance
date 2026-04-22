@@ -68,7 +68,9 @@ serve(async (req) => {
 
   // ── Connect claimed rep: invoked by REST Update-Call from call-claim. Pulls
   //    caller out of the <Enqueue> hold room and dials the rep's Call Fabric
-  //    subscriber identity, which routes the INVITE to their browser SDK. ──
+  //    subscriber via SIP (`sip:<identity>@<space>`), which routes the INVITE
+  //    to their browser SDK. Note: legacy <Client> does NOT work with SAT
+  //    subscribers — it's the old Verto client registry. ──
   if (step === 'connect-claimed-rep') {
     const identity = url.searchParams.get('identity');
     const queueId = url.searchParams.get('queueId');
@@ -92,13 +94,45 @@ serve(async (req) => {
         .catch(() => {});
     }
 
+    const sipDomain = Deno.env.get('SIGNALWIRE_SPACE_URL');
+    console.log(`[sw-inbound] connect-claimed-rep identity=${identity} sipDomain=${sipDomain}`);
     elements.push(laml.dialClient(identity, {
       timeLimit: 14400,
       action: `${baseUrl}/sw-inbound?step=queue-exit&queueId=${queueId ?? ''}`,
       timeout: 30,
       record: true,
+      callerId: from,
+      sipDomain,
     }));
     return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+  }
+
+  // ── Outbound bridge: invoked when a customer answers a rep-initiated
+  //    outbound call. Dials the rep's SDK via SIP so the rep is bridged in. ──
+  if (step === 'outbound-bridge') {
+    const identity = url.searchParams.get('identity');
+    const callId = url.searchParams.get('callId');
+    const elements: string[] = [];
+    if (!identity) {
+      elements.push(laml.say('This call was initiated in error. Goodbye.'));
+      elements.push(laml.hangup());
+      return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+    }
+    const sipDomain = Deno.env.get('SIGNALWIRE_SPACE_URL');
+    console.log(`[sw-inbound] outbound-bridge identity=${identity} callId=${callId}`);
+    elements.push(laml.dialClient(identity, {
+      timeLimit: 14400,
+      action: `${baseUrl}/sw-inbound?step=outbound-end&callId=${callId ?? ''}`,
+      timeout: 30,
+      record: true,
+      sipDomain,
+    }));
+    return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+  }
+
+  // ── Outbound end: after <Dial> completes on an outbound-bridge call. ──
+  if (step === 'outbound-end') {
+    return new Response(laml.buildLamlResponse([laml.hangup()]), { headers: { 'Content-Type': 'application/xml' } });
   }
 
   // ── Rep greeting: played to rep when they answer, before caller bridges in ──

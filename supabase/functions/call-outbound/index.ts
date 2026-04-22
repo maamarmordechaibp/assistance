@@ -8,6 +8,7 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts';
 import { corsHeaders, handleCors } from '../_shared/cors.ts';
 import { createServiceClient, getUser } from '../_shared/supabase.ts';
+import { createCall, toSwIdentity } from '../_shared/signalwire.ts';
 
 function normalizePhone(p: string): string {
   const digits = p.replace(/[^0-9+]/g, '');
@@ -73,16 +74,21 @@ serve(async (req) => {
     // fall back to email match for admins who are also reps).
     let { data: rep } = await supabase
       .from('reps')
-      .select('id')
+      .select('id, email')
       .eq('id', user.id)
       .maybeSingle();
     if (!rep) {
       const { data: repByEmail } = await supabase
         .from('reps')
-        .select('id')
+        .select('id, email')
         .eq('email', user.email)
         .maybeSingle();
       rep = repByEmail ?? null;
+    }
+    if (!rep?.email) {
+      return new Response(JSON.stringify({ error: 'No rep record found for this user' }), {
+        status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     const clientCallId = String(body?.client_call_id || crypto.randomUUID());
@@ -106,11 +112,54 @@ serve(async (req) => {
       });
     }
 
+    // Initiate the actual outbound call via SignalWire REST Create-Call.
+    // This dials the CUSTOMER first; when they answer, the LaML at
+    // sw-inbound?step=outbound-bridge dials the rep's SDK via SIP.
+    // (Dialing PSTN directly from `client.dial()` on the browser does not
+    // work reliably for SAT subscribers without a fromFabricAddress.)
+    const swFrom = Deno.env.get('SIGNALWIRE_FROM_NUMBER') || Deno.env.get('SIGNALWIRE_PHONE_NUMBER') || '';
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    if (!swFrom) {
+      console.error('[call-outbound] SIGNALWIRE_FROM_NUMBER not configured');
+      return new Response(JSON.stringify({ error: 'Outbound caller ID not configured' }), {
+        status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    const identity = toSwIdentity(rep.email);
+    const bridgeUrl = `${supabaseUrl}/functions/v1/sw-inbound?step=outbound-bridge` +
+      `&identity=${encodeURIComponent(identity)}` +
+      `&callId=${encodeURIComponent(inserted.id)}`;
+
+    let swCallSid: string | null = null;
+    try {
+      const swRes = await createCall({
+        to: toNumber,
+        from: swFrom,
+        url: bridgeUrl,
+        record: true,
+        timeLimit: 14400,
+      });
+      swCallSid = swRes?.sid ?? null;
+      console.log(`[call-outbound] createCall sid=${swCallSid} to=${toNumber}`);
+      if (swCallSid) {
+        await supabase.from('calls').update({ call_sid: swCallSid }).eq('id', inserted.id);
+      } else {
+        console.error('[call-outbound] createCall returned no sid:', JSON.stringify(swRes).slice(0, 300));
+      }
+    } catch (err) {
+      console.error('[call-outbound] createCall error:', err);
+      return new Response(JSON.stringify({ error: 'Failed to place call' }), {
+        status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     return new Response(JSON.stringify({
       call_id: inserted.id,
       customer_id: customerId,
       customer_name: customer?.full_name ?? null,
       balance_minutes: customer?.current_balance_minutes ?? null,
+      sw_call_sid: swCallSid,
+      identity,
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 

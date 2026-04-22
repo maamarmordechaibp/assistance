@@ -84,6 +84,9 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
   // auto-accepted (the rep already clicked Answer).
   const awaitingInviteRef = useRef(false);
   const inviteWaitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // If set, an outbound PSTN call is in-flight (server-initiated via REST).
+  // When the invite arrives and we accept, 'destroy' posts call-outbound end.
+  const outboundTrackingRef = useRef<{ callId: string | null; startedAt: number } | null>(null);
   // Hidden div where the v3 SDK mounts audio elements for the call
   const audioRootRef = useRef<HTMLDivElement | null>(null);
 
@@ -151,14 +154,34 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
             const ring = pendingRingRef.current;
             pendingRingRef.current = null;
             onCallStarted?.(call.id ?? 'call', ring?.fromNumber ?? '');
-            const handleCallEnded = () => {
+            const handleCallEnded = async () => {
               if (callRef.current === call) {
                 callRef.current = null;
                 setCallState('idle');
                 setCallerNumber('');
                 setMuted(false);
                 setDeafened(false);
-                addLog('Call ended (remote)');
+                // If this was an outbound REST call, post end to deduct minutes.
+                const tracking = outboundTrackingRef.current;
+                outboundTrackingRef.current = null;
+                if (tracking?.callId) {
+                  const durationSecs = Math.floor((Date.now() - tracking.startedAt) / 1000);
+                  try {
+                    await edgeFn('call-outbound', {
+                      method: 'POST',
+                      body: JSON.stringify({
+                        action: 'end',
+                        call_id: tracking.callId,
+                        duration_seconds: durationSecs,
+                      }),
+                    });
+                    addLog(`Call ended (${durationSecs}s, ${Math.ceil(durationSecs / 60)} min deducted)`);
+                  } catch (endErr) {
+                    console.warn('[softphone] end-track error:', endErr);
+                  }
+                } else {
+                  addLog('Call ended (remote)');
+                }
                 onCallEnded?.();
               }
             };
@@ -192,9 +215,10 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
             if (!clientInstance) throw new Error('Not connected');
             setCallState('connecting');
             setCallerNumber(toNumber);
-            addLog(`Dialing ${toNumber}...`);
+            addLog(`Calling ${toNumber}...`);
             try {
-              // Prime mic permission before dial (SDK needs it)
+              // Prime mic permission so SDK can build RTCPeerConnection
+              // the moment the INVITE arrives.
               try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
                 stream.getTracks().forEach(t => t.stop());
@@ -205,60 +229,58 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
                 throw permErr;
               }
 
-              // Create a tracking row in `calls` so admin/rep history
-              // reflects this call and we can deduct minutes on end.
-              let trackedCallId: string | null = null;
+              // Arm auto-accept BEFORE triggering the call — SignalWire will
+              // dial the customer, and when they answer, our LaML
+              // (sw-inbound?step=outbound-bridge) dials our SDK via SIP.
+              awaitingInviteRef.current = true;
+
+              // Server-side place the call via REST Create-Call. This is
+              // the ONLY reliable way to do PSTN dialing from a SAT
+              // subscriber without a configured fromFabricAddress.
               const callStartedAt = Date.now();
+              let trackedCallId: string | null = null;
               try {
                 const startRes = await edgeFn('call-outbound', {
                   method: 'POST',
                   body: JSON.stringify({ action: 'start', to_number: toNumber }),
                 });
-                if (startRes.ok) {
-                  const j = await startRes.json();
-                  trackedCallId = j.call_id ?? null;
-                  if (j.customer_name) addLog(`Customer: ${j.customer_name} (${j.balance_minutes ?? '?'} min)`);
-                } else {
-                  addLog(`(tracking skipped: ${startRes.status})`);
+                if (!startRes.ok) {
+                  const errBody = await startRes.text().catch(() => '');
+                  throw new Error(`Start failed (${startRes.status}): ${errBody.slice(0, 160)}`);
                 }
+                const j = await startRes.json();
+                trackedCallId = j.call_id ?? null;
+                if (j.customer_name) addLog(`Customer: ${j.customer_name} (${j.balance_minutes ?? '?'} min)`);
+                addLog(`Ringing ${toNumber} via SignalWire (sid=${j.sw_call_sid ?? '?'})`);
               } catch (trackErr) {
-                console.warn('[softphone] outbound start-track error:', trackErr);
-              }
-
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const call: any = await (clientInstance as any).dial({
-                to: toNumber,
-                rootElement: audioRootRef.current ?? undefined,
-                audio: true,
-                video: false,
-              });
-              callRef.current = call;
-              setCallState('active');
-              addLog(`Outbound call active to ${toNumber}`);
-              onCallStarted?.(call.id ?? 'call', toNumber);
-
-              const endOutbound = async () => {
-                const durationSecs = Math.floor((Date.now() - callStartedAt) / 1000);
-                callRef.current = null;
+                awaitingInviteRef.current = false;
                 setCallState('idle');
                 setCallerNumber('');
-                onCallEnded?.();
-                if (trackedCallId) {
-                  try {
-                    await edgeFn('call-outbound', {
+                throw trackErr;
+              }
+
+              // Safety timeout: if the SDK doesn't receive the INVITE
+              // within 45s (customer didn't answer), reset.
+              if (inviteWaitTimerRef.current) clearTimeout(inviteWaitTimerRef.current);
+              inviteWaitTimerRef.current = setTimeout(() => {
+                if (awaitingInviteRef.current) {
+                  awaitingInviteRef.current = false;
+                  addLog('No answer from customer (45s).');
+                  setCallState('idle');
+                  setCallerNumber('');
+                  if (trackedCallId) {
+                    edgeFn('call-outbound', {
                       method: 'POST',
-                      body: JSON.stringify({ action: 'end', call_id: trackedCallId, duration_seconds: durationSecs }),
-                    });
-                    addLog(`Call ended (${durationSecs}s, ${Math.ceil(durationSecs / 60)} min deducted)`);
-                  } catch (endErr) {
-                    console.warn('[softphone] outbound end-track error:', endErr);
+                      body: JSON.stringify({ action: 'end', call_id: trackedCallId, duration_seconds: 0 }),
+                    }).catch(() => {});
                   }
-                } else {
-                  addLog(`Call ended (${durationSecs}s)`);
                 }
-              };
-              try { call.on('destroy', endOutbound); } catch { /* ignore */ }
-              try { call.on('call.left', endOutbound); } catch { /* ignore */ }
+              }, 45000);
+
+              // Track call-end separately — the invite handler sets
+              // callRef.current when it auto-accepts; hook 'destroy' there
+              // to POST call-outbound end with proper duration.
+              outboundTrackingRef.current = { callId: trackedCallId, startedAt: callStartedAt };
             } catch (err) {
               addLog(`Dial failed: ${err instanceof Error ? err.message : err}`);
               setCallState('idle');
