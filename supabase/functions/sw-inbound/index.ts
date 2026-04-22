@@ -44,9 +44,12 @@ serve(async (req) => {
   if (step === 'queue-exit') {
     const queueId = url.searchParams.get('queueId');
     const queueResult = formData.get('QueueResult') as string | null;
-    // QueueResult: 'bridged', 'hangup', 'leave', 'error', 'system-error', ...
-    const finalStatus = queueResult === 'bridged' ? 'completed' : 'abandoned';
-    if (queueId) {
+    // QueueResult: 'bridged', 'hangup', 'leave', 'error', 'redirected', ...
+    // 'redirected' means we REST-updated the call to dial the rep via
+    // connect-claimed-rep — that handler owns the row, don't touch it.
+    // 'bridged' is the legacy <Dial><Queue> flow.
+    if (queueId && queueResult !== 'redirected') {
+      const finalStatus = queueResult === 'bridged' ? 'completed' : 'abandoned';
       await supabase
         .from('call_queue')
         .update({
@@ -54,11 +57,48 @@ serve(async (req) => {
           ended_at: new Date().toISOString(),
         })
         .eq('id', queueId)
-        .in('status', ['waiting', 'claimed'])
+        // Only reconcile from 'waiting' — if already 'claimed' or 'completed',
+        // the rep-bridge flow is in charge.
+        .eq('status', 'waiting')
         .then(() => {})
         .catch(() => {});
     }
     return new Response(laml.buildLamlResponse([laml.hangup()]), { headers: { 'Content-Type': 'application/xml' } });
+  }
+
+  // ── Connect claimed rep: invoked by REST Update-Call from call-claim. Pulls
+  //    caller out of the <Enqueue> hold room and dials the rep's Call Fabric
+  //    subscriber identity, which routes the INVITE to their browser SDK. ──
+  if (step === 'connect-claimed-rep') {
+    const identity = url.searchParams.get('identity');
+    const queueId = url.searchParams.get('queueId');
+    const elements: string[] = [];
+    if (!identity) {
+      console.error('[sw-inbound] connect-claimed-rep missing identity');
+      elements.push(laml.say('We are unable to connect you right now. Please try again.'));
+      elements.push(laml.hangup());
+      return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+    }
+
+    // Mark the queue row completed right away (the <Enqueue> action URL
+    // won't fire a second time because we REST-redirected).
+    if (queueId) {
+      await supabase
+        .from('call_queue')
+        .update({ status: 'completed', ended_at: new Date().toISOString() })
+        .eq('id', queueId)
+        .in('status', ['waiting', 'claimed'])
+        .then(() => {})
+        .catch(() => {});
+    }
+
+    elements.push(laml.dialClient(identity, {
+      timeLimit: 14400,
+      action: `${baseUrl}/sw-inbound?step=queue-exit&queueId=${queueId ?? ''}`,
+      timeout: 30,
+      record: true,
+    }));
+    return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
   }
 
   // ── Rep greeting: played to rep when they answer, before caller bridges in ──

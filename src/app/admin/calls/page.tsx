@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { formatPhone, formatDuration, formatDateTime } from '@/lib/utils';
 import Link from 'next/link';
 import { toast } from 'sonner';
@@ -13,6 +14,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Filter,
+  PhoneCall,
 } from 'lucide-react';
 import { edgeFn } from '@/lib/supabase/edge';
 
@@ -25,7 +27,7 @@ interface Call {
   flag_status: string;
   flag_reason: string | null;
   extensions_used: number;
-  customer?: { id: string; full_name: string } | null;
+  customer?: { id: string; full_name: string; primary_phone?: string } | null;
   rep?: { id: string; full_name: string } | null;
   task_category?: { name: string } | null;
   analysis?: Array<{
@@ -36,6 +38,7 @@ interface Call {
 }
 
 export default function AdminCalls() {
+  const router = useRouter();
   const [calls, setCalls] = useState<Call[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -190,6 +193,15 @@ export default function AdminCalls() {
                     >
                       <Eye className="w-4 h-4 text-gray-500" />
                     </Link>
+                    {call.customer?.primary_phone && (
+                      <button
+                        onClick={() => router.push(`/rep?dial=${encodeURIComponent(call.customer!.primary_phone!)}`)}
+                        className="ml-1 p-1.5 rounded hover:bg-green-100 inline-flex"
+                        title={`Call back ${formatPhone(call.customer.primary_phone)}`}
+                      >
+                        <PhoneCall className="w-4 h-4 text-green-600" />
+                      </button>
+                    )}
                   </td>
                 </tr>
               );

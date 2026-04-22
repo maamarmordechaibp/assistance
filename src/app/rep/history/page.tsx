@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { formatDuration, formatPhone, formatDateTime } from '@/lib/utils';
-import { History, Search, ChevronLeft, ChevronRight } from 'lucide-react';
+import { History, Search, ChevronLeft, ChevronRight, PhoneCall } from 'lucide-react';
 import { edgeFn } from '@/lib/supabase/edge';
 
 interface Call {
@@ -20,6 +21,7 @@ interface Call {
 }
 
 export default function RepHistory() {
+  const router = useRouter();
   const [calls, setCalls] = useState<Call[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -66,6 +68,7 @@ export default function RepHistory() {
               <th className="text-left px-4 py-3 font-medium text-gray-600">Minutes</th>
               <th className="text-left px-4 py-3 font-medium text-gray-600">Outcome</th>
               <th className="text-left px-4 py-3 font-medium text-gray-600">Status</th>
+              <th className="text-left px-4 py-3 font-medium text-gray-600">Action</th>
             </tr>
           </thead>
           <tbody className="divide-y">
@@ -121,11 +124,25 @@ export default function RepHistory() {
                     </span>
                   )}
                 </td>
+                <td className="px-4 py-3">
+                  {call.customer?.primary_phone ? (
+                    <button
+                      onClick={() => router.push(`/rep?dial=${encodeURIComponent(call.customer!.primary_phone)}`)}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-green-600 text-white text-xs font-medium hover:bg-green-700 transition"
+                      title={`Call back ${formatPhone(call.customer.primary_phone)}`}
+                    >
+                      <PhoneCall className="w-3.5 h-3.5" />
+                      Call Back
+                    </button>
+                  ) : (
+                    <span className="text-gray-400 text-xs">—</span>
+                  )}
+                </td>
               </tr>
             ))}
             {calls.length === 0 && !loading && (
               <tr>
-                <td colSpan={7} className="px-4 py-12 text-center text-gray-500">
+                <td colSpan={8} className="px-4 py-12 text-center text-gray-500">
                   No call history found.
                 </td>
               </tr>

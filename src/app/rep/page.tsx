@@ -179,6 +179,35 @@ export default function RepDashboard() {
     return () => clearInterval(interval);
   }, []);
 
+  // Auto-dial when arriving from /admin/calls or /rep/history with ?dial=<phone>
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const sp = new URLSearchParams(window.location.search);
+    const dial = sp.get('dial');
+    if (!dial) return;
+
+    let fired = false;
+    const deadline = Date.now() + 30_000;
+    const tick = setInterval(async () => {
+      if (fired) return;
+      if (makeCallFnRef.current) {
+        fired = true;
+        clearInterval(tick);
+        try { window.history.replaceState({}, '', window.location.pathname); } catch { /* noop */ }
+        try {
+          toast.info(`Calling ${dial}…`);
+          await makeCallFnRef.current(dial);
+        } catch (err) {
+          toast.error('Call failed: ' + (err instanceof Error ? err.message : String(err)));
+        }
+      } else if (Date.now() > deadline) {
+        clearInterval(tick);
+        toast.error('Softphone did not initialize in time. Please dial manually.');
+      }
+    }, 500);
+    return () => clearInterval(tick);
+  }, []);
+
   // Subscribe to real-time call updates
   useEffect(() => {
     const channel = supabase
@@ -950,6 +979,9 @@ export default function RepDashboard() {
               onCallEnded={handleCallEnded}
               onReady={(makeCall) => {
                 makeCallFnRef.current = makeCall;
+                // Generic global hook used by any rep subpage
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                (window as any).__repMakeCall = makeCall;
                 // Also wire into the callbacks page if it's currently mounted
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 const cbRef = (window as any).__repCallbacksMakeCallRef;

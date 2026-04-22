@@ -15,16 +15,27 @@ import { createClient } from '@/lib/supabase/client';
 import { edgeFn } from '@/lib/supabase/edge';
 
 /* SignalWire JS v3 — Call Fabric SDK.
-   Architecture note: we do NOT call client.online(). SAT tokens issued
-   by /api/fabric/subscribers/tokens reject subscriber.online with -32603
-   on v3.30 (see signalwire-legacy-js#1339). Instead, inbound callers are
-   parked in SignalWire queues (rep_<id> or 'general') by the sw-inbound
-   LaML webhook, which also inserts a call_queue row in Supabase. This
-   component subscribes to call_queue via Supabase Realtime, shows an
-   incoming ring when a row arrives, and on Answer it:
-     1) POSTs to call-claim to atomically reserve the row, then
-     2) client.dial({ to: 'queue:<name>' }) — SignalWire bridges us to
-        the oldest caller in that queue. */
+   Architecture: the rep browser does NOT client.dial() to pick up queued
+   calls — "queue:<name>" is not a valid Call Fabric address and the SDK
+   silently opens a dead media session with no bridged party. Instead:
+
+   1. Inbound callers are <Enqueue>'d by the sw-inbound LaML webhook and a
+      row is inserted in the call_queue table.
+   2. This component subscribes to call_queue via Supabase Realtime +
+      polling. When a row appears, it shows the ring UI.
+   3. On Answer: POSTs call-claim, which atomically claims the row AND
+      uses the SignalWire REST Update-Call API to redirect the caller's
+      live leg to a new LaML endpoint that does
+      <Dial><Client>identity</Client></Dial>.
+   4. SignalWire delivers the resulting INVITE over this rep's already-
+      connected SDK websocket session. IncomingCallManager fires our
+      handler, which auto-accepts and joins the call.
+
+   We register the websocket incoming-call handler via client.online(),
+   tolerating the -32603 RPC error (see signalwire-legacy-js#1339) — the
+   SDK registers the handler BEFORE the failing RPC, and the server routes
+   INVITEs to any authenticated subscriber websocket regardless of the
+   online RPC status. */
 
 interface SoftphoneProps {
   token: string | null;
@@ -69,6 +80,10 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const callRef = useRef<any>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  // When true, an incoming invite arriving on the websocket should be
+  // auto-accepted (the rep already clicked Answer).
+  const awaitingInviteRef = useRef(false);
+  const inviteWaitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Hidden div where the v3 SDK mounts audio elements for the call
   const audioRootRef = useRef<HTMLDivElement | null>(null);
 
@@ -100,6 +115,77 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
         setError(null);
         addLog(`Ready (queue-mode) — waiting for calls as ${identity ?? 'unknown'}`);
 
+        // ── Register incoming-call handler ──
+        // client.online() does two things: (1) registers the notification
+        // handler synchronously, then (2) sends subscriber.online RPC which
+        // fails with -32603 on SAT tokens. The handler IS still registered
+        // by the time the RPC fails, and INVITEs routed to this subscriber
+        // by LaML <Client> still reach us. So we call .online() and swallow
+        // the RPC error.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const handleInviteNotification = async (notification: any) => {
+          const invite = notification?.invite;
+          if (!invite) return;
+          addLog(`Invite received (callID=${invite.details?.callID ?? '?'})`);
+          if (!awaitingInviteRef.current) {
+            // Rep didn't click Answer — reject politely.
+            addLog('Rejecting invite (not awaiting).');
+            try { await invite.reject(); } catch { /* ignore */ }
+            return;
+          }
+          try {
+            awaitingInviteRef.current = false;
+            if (inviteWaitTimerRef.current) {
+              clearTimeout(inviteWaitTimerRef.current);
+              inviteWaitTimerRef.current = null;
+            }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const call: any = await invite.accept({
+              rootElement: audioRootRef.current ?? undefined,
+              audio: true,
+              video: false,
+            });
+            callRef.current = call;
+            setCallState('active');
+            addLog('Invite accepted — call active');
+            const ring = pendingRingRef.current;
+            pendingRingRef.current = null;
+            onCallStarted?.(call.id ?? 'call', ring?.fromNumber ?? '');
+            const handleCallEnded = () => {
+              if (callRef.current === call) {
+                callRef.current = null;
+                setCallState('idle');
+                setCallerNumber('');
+                setMuted(false);
+                setDeafened(false);
+                addLog('Call ended (remote)');
+                onCallEnded?.();
+              }
+            };
+            try { call.on('destroy', handleCallEnded); } catch { /* ignore */ }
+            try { call.on('call.left', handleCallEnded); } catch { /* ignore */ }
+          } catch (acceptErr) {
+            console.error('[softphone] accept error:', acceptErr);
+            addLog(`Accept failed: ${acceptErr instanceof Error ? acceptErr.message : acceptErr}`);
+            setCallState('idle');
+            setCallerNumber('');
+          }
+        };
+
+        try {
+          await clientInstance.online({
+            incomingCallHandlers: {
+              websocket: handleInviteNotification,
+              all: handleInviteNotification,
+            },
+          });
+          addLog('online() ok — listening for invites');
+        } catch (onlineErr) {
+          // Expected on SAT tokens; the handler is still registered.
+          const m = onlineErr instanceof Error ? onlineErr.message : String(onlineErr);
+          addLog(`online() rpc warn (handler still registered): ${m.slice(0, 100)}`);
+        }
+
         // Expose outbound call capability to parent
         if (onReady) {
           const makeOutboundCall = async (toNumber: string) => {
@@ -118,6 +204,27 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
                 setCallerNumber('');
                 throw permErr;
               }
+
+              // Create a tracking row in `calls` so admin/rep history
+              // reflects this call and we can deduct minutes on end.
+              let trackedCallId: string | null = null;
+              const callStartedAt = Date.now();
+              try {
+                const startRes = await edgeFn('call-outbound', {
+                  method: 'POST',
+                  body: JSON.stringify({ action: 'start', to_number: toNumber }),
+                });
+                if (startRes.ok) {
+                  const j = await startRes.json();
+                  trackedCallId = j.call_id ?? null;
+                  if (j.customer_name) addLog(`Customer: ${j.customer_name} (${j.balance_minutes ?? '?'} min)`);
+                } else {
+                  addLog(`(tracking skipped: ${startRes.status})`);
+                }
+              } catch (trackErr) {
+                console.warn('[softphone] outbound start-track error:', trackErr);
+              }
+
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const call: any = await (clientInstance as any).dial({
                 to: toNumber,
@@ -129,7 +236,29 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
               setCallState('active');
               addLog(`Outbound call active to ${toNumber}`);
               onCallStarted?.(call.id ?? 'call', toNumber);
-              try { call.on('destroy', () => { callRef.current = null; setCallState('idle'); setCallerNumber(''); onCallEnded?.(); }); } catch { /* ignore */ }
+
+              const endOutbound = async () => {
+                const durationSecs = Math.floor((Date.now() - callStartedAt) / 1000);
+                callRef.current = null;
+                setCallState('idle');
+                setCallerNumber('');
+                onCallEnded?.();
+                if (trackedCallId) {
+                  try {
+                    await edgeFn('call-outbound', {
+                      method: 'POST',
+                      body: JSON.stringify({ action: 'end', call_id: trackedCallId, duration_seconds: durationSecs }),
+                    });
+                    addLog(`Call ended (${durationSecs}s, ${Math.ceil(durationSecs / 60)} min deducted)`);
+                  } catch (endErr) {
+                    console.warn('[softphone] outbound end-track error:', endErr);
+                  }
+                } else {
+                  addLog(`Call ended (${durationSecs}s)`);
+                }
+              };
+              try { call.on('destroy', endOutbound); } catch { /* ignore */ }
+              try { call.on('call.left', endOutbound); } catch { /* ignore */ }
             } catch (err) {
               addLog(`Dial failed: ${err instanceof Error ? err.message : err}`);
               setCallState('idle');
@@ -282,22 +411,8 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
     try {
       setCallState('connecting');
       addLog(`Claiming queue row ${ring.queueId}...`);
-      const claimRes = await edgeFn('call-claim', {
-        method: 'POST',
-        body: JSON.stringify({ queue_id: ring.queueId }),
-        headers: { 'Content-Type': 'application/json' },
-      });
-      if (!claimRes.ok) {
-        addLog(`Claim failed (${claimRes.status}) — another rep got it`);
-        pendingRingRef.current = null;
-        setCallState('idle');
-        setCallerNumber('');
-        return;
-      }
-      const { queue_name } = await claimRes.json();
-      // Prime the microphone BEFORE dial(): the SignalWire SDK's
-      // createDeviceWatcher() throws if getUserMedia has never run in
-      // this page. Also surfaces permission prompts promptly.
+      // Prime mic BEFORE claim so the SDK can create its RTCPeerConnection
+      // the moment the INVITE arrives.
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
         stream.getTracks().forEach(t => t.stop());
@@ -309,42 +424,45 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
         setCallerNumber('');
         return;
       }
-      addLog(`Claimed. Dialing queue:${queue_name}...`);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const call: any = await clientInstance.dial({
-        to: `queue:${queue_name}`,
-        rootElement: audioRootRef.current ?? undefined,
-        audio: true,
-        video: false,
+      // Arm the incoming-invite handler to auto-accept, then claim.
+      awaitingInviteRef.current = true;
+      const claimRes = await edgeFn('call-claim', {
+        method: 'POST',
+        body: JSON.stringify({ queue_id: ring.queueId }),
+        headers: { 'Content-Type': 'application/json' },
       });
-      callRef.current = call;
-      pendingRingRef.current = null;
-      setCallState('active');
-      addLog('Call active');
-      onCallStarted?.(call.id ?? 'call', ring.fromNumber);
-
-      const handleCallEnded = () => {
-        if (callRef.current === call) {
-          callRef.current = null;
+      if (!claimRes.ok) {
+        awaitingInviteRef.current = false;
+        addLog(`Claim failed (${claimRes.status}) — another rep got it`);
+        pendingRingRef.current = null;
+        setCallState('idle');
+        setCallerNumber('');
+        return;
+      }
+      const claimData = await claimRes.json().catch(() => ({}));
+      addLog(`Claimed (bridge_initiated=${claimData.bridge_initiated}). Waiting for invite…`);
+      // Safety timeout: if the SDK doesn't receive the INVITE within 20s,
+      // something upstream failed — reset so the rep can try again.
+      if (inviteWaitTimerRef.current) clearTimeout(inviteWaitTimerRef.current);
+      inviteWaitTimerRef.current = setTimeout(() => {
+        if (awaitingInviteRef.current) {
+          awaitingInviteRef.current = false;
+          addLog('Timeout waiting for invite (20s). Aborting.');
+          pendingRingRef.current = null;
           setCallState('idle');
           setCallerNumber('');
-          setMuted(false);
-          setDeafened(false);
-          addLog('Call ended (remote)');
-          onCallEnded?.();
         }
-      };
-      try { call.on('destroy', handleCallEnded); } catch { /* ignore */ }
-      try { call.on('call.left', handleCallEnded); } catch { /* ignore */ }
+      }, 20000);
     } catch (err) {
       console.error('Answer error:', err);
+      awaitingInviteRef.current = false;
       addLog(`Answer failed: ${err instanceof Error ? err.message : err}`);
       callRef.current = null;
       pendingRingRef.current = null;
       setCallState('idle');
       setCallerNumber('');
     }
-  }, [onCallStarted, onCallEnded, addLog]);
+  }, [addLog]);
 
   const hangup = useCallback(async () => {
     try {
@@ -363,6 +481,8 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
     } finally {
       callRef.current = null;
       pendingRingRef.current = null;
+      awaitingInviteRef.current = false;
+      if (inviteWaitTimerRef.current) { clearTimeout(inviteWaitTimerRef.current); inviteWaitTimerRef.current = null; }
       setCallState('idle');
       setCallerNumber('');
       setMuted(false);
