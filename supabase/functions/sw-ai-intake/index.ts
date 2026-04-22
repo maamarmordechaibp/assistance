@@ -13,7 +13,7 @@ import { serve } from 'https://deno.land/std@0.208.0/http/server.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
 import * as laml from '../_shared/laml.ts';
 
-const MAX_TURNS = 8;
+const MAX_TURNS = 3;           // opening + at most 2 follow-ups, then always transfer
 const MAX_SILENCE_RETRIES = 2;
 
 // If the customer says any of these, skip intake and go straight to rep
@@ -28,22 +28,22 @@ const OPT_OUT_KEYWORDS = [
 // general online task assistance — NOT shopping only.
 const TURN_PROMPT = `You are a warm, human-sounding phone intake assistant for Offline — a live support service that helps customers with online tasks like shopping, bill payments, account assistance, and filling out forms.
 
-YOUR JOB: Carry a natural, human conversation to understand exactly what the caller needs BEFORE we hand them to a live representative.
+YOUR JOB: Collect just enough context to pass the caller to a live representative quickly. You are NOT here to fully qualify the request — the representative will.
 
-CRITICAL RULES:
-- Use common sense. If the caller trails off mid-sentence (for example "I want to fill out…"), ASK what they want to fill out — do NOT assume they're done.
-- Ask ONE short follow-up at a time (under 15 words). Sound like a real person, not a form.
-- Keep gathering details until you have BOTH: (a) the task type and (b) enough specifics that a representative could start working immediately.
-- Typical specifics to gather depending on the task:
-  • Shopping → item, budget, brand/size/color preferences
-  • Bill payment → which biller, approximate amount, payment method
-  • Account help → which website/service, what needs changing
-  • Form / application → which form (name or purpose), any deadline
-- Don't over-interrogate. 1–3 follow-ups is usually enough. If the caller sounds frustrated or repeats themselves, finish.
-- If the caller asks for a person / representative / agent at any point, set done=true immediately.
+STRICT RULES (BREAKING THESE FRUSTRATES CALLERS):
+1. Ask AT MOST ONE follow-up question. Never ask two questions in a row.
+2. As soon as the caller names a task type AND one concrete detail, set done=true immediately. Examples that are ALREADY enough — you MUST mark done=true for these:
+   • "I want to fill out a government form" → done=true (task: form, detail: government)
+   • "I need to pay my electric bill" → done=true
+   • "Buy me a laptop under 500" → done=true
+   • "Help me log into my bank" → done=true
+3. NEVER ask the same question twice. If you already asked "Can you tell me what you need?" and got any answer, mark done=true even if the answer is short.
+4. Use common sense on trailing sentences ("I want to fill out…") — ask what they want to fill out. But once they answer, move on.
+5. Keep follow-up questions under 12 words and sound like a real person.
+6. If the caller asks for a person / representative / agent at any point, set done=true immediately.
 
 OUTPUT FORMAT — respond with valid JSON ONLY in one of these two shapes:
-1. Need more info → {"done": false, "question": "your short natural follow-up question"}
+1. Need one more detail → {"done": false, "question": "your short natural follow-up question"}
 2. Enough info → {"done": true, "summary": "one-sentence summary of what the caller needs"}`;
 
 // Used by generateBrief() with gpt-4o for high-quality shopping expertise
@@ -298,17 +298,54 @@ serve(async (req) => {
   // Append customer's spoken answer to context
   messages.push({ role: 'user', content: speechResult });
 
-  // ── GPT decides when we have enough info. Hard cap at MAX_TURNS so we never
-  //    loop forever. ──────────────────────────────────────────────────────────
+  // ── Hard cap first: after opening + 2 follow-ups, always transfer. ──
+  // turn 0 = opening question asked, turn 1 = first answer received,
+  // turn 2 = second answer received. By turn 2 we MUST finish regardless of
+  // what GPT wants. This prevents the "asked 3-4 times" loop the caller hit.
+  if (turn >= 2) {
+    let doneResult: GptDoneResult;
+    try {
+      doneResult = await generateBrief(messages);
+    } catch (err) {
+      console.error('[sw-ai-intake] Brief generation error:', err);
+      return await transferToRep(null);
+    }
+    return await finishWithBrief(doneResult);
+  }
+
+  // ── Ask GPT whether it has enough, OR a follow-up question. ──
   let turnResult: TurnResult;
   try {
     turnResult = await callGptTurn(messages);
   } catch (err) {
     console.error('[sw-ai-intake] callGptTurn error:', err);
-    // On error, finish up and hand off rather than re-prompting indefinitely.
     turnResult = { done: true, summary: speechResult };
   }
-  const shouldFinishNow = turnResult.done || turn >= MAX_TURNS - 1;
+
+  // ── Loop guard: if GPT's proposed follow-up is essentially the same as one
+  //   we already asked, force done. Prevents repeat-question frustration. ──
+  function normalize(s: string): string {
+    return s.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+  }
+  if (!turnResult.done) {
+    const proposed = normalize(turnResult.question);
+    const priorQuestions = messages
+      .filter(m => m.role === 'assistant')
+      .map(m => {
+        try { return normalize(JSON.parse(m.content).question || ''); } catch { return ''; }
+      })
+      .filter(Boolean);
+    const repeats = priorQuestions.some(q =>
+      q === proposed ||
+      (q.length > 10 && proposed.length > 10 && (q.includes(proposed.slice(0, 15)) || proposed.includes(q.slice(0, 15))))
+    );
+    if (repeats) {
+      console.log('[sw-ai-intake] loop detected — forcing done');
+      turnResult = { done: true, summary: speechResult };
+    }
+  }
+
+  const shouldFinishNow = turnResult.done;
 
   // Shared helper: look up past findings + build full brief + transfer to rep
   async function finishWithBrief(doneResult: GptDoneResult): Promise<Response> {
