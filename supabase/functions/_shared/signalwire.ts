@@ -165,6 +165,63 @@ export async function listQueues() {
   return res.json();
 }
 
+/** Look up the Call Fabric resource-address path (e.g. `/private/office_foo`)
+ *  for a subscriber. SAT subscribers are NOT reachable via plain SIP URIs
+ *  (`sip:identity@space` returns 408); they must be addressed through the
+ *  Fabric `/private/<name>` path with the SWML `connect` verb.
+ *
+ *  Returns null if no address can be discovered, so callers can fall back. */
+export async function getSubscriberAddressPath(identity: string): Promise<string | null> {
+  const { email } = subscriberCreds(identity);
+  const spaceUrl = getSpaceUrl();
+  const auth = getAuthHeader();
+
+  try {
+    // 1) Resolve subscriber id by email.
+    const listRes = await fetch(`https://${spaceUrl}/api/fabric/resources/subscribers?email=${encodeURIComponent(email)}`, {
+      headers: { Authorization: auth },
+    });
+    if (!listRes.ok) return null;
+    const listData = await listRes.json();
+    const sub = Array.isArray(listData?.data)
+      ? listData.data.find((s: { email?: string }) => s.email === email)
+      : null;
+    if (!sub?.id) return null;
+
+    // 2) Fetch the subscriber resource detail — should include its addresses.
+    const detailRes = await fetch(`https://${spaceUrl}/api/fabric/resources/subscribers/${sub.id}`, {
+      headers: { Authorization: auth },
+    });
+    if (!detailRes.ok) return null;
+    const detail = await detailRes.json();
+
+    type Addr = { name?: string; display_name?: string; context?: string; resource_type?: string };
+    const addresses: Addr[] = detail?.addresses || detail?.data?.addresses || [];
+    const priv = addresses.find((a) => (a.context || '').toLowerCase() === 'private') || addresses[0];
+    if (priv?.name) {
+      const ctx = (priv.context || 'private').toLowerCase();
+      return `/${ctx}/${priv.name}`;
+    }
+    // 3) Fallback — hit the /addresses endpoint directly.
+    const addrRes = await fetch(`https://${spaceUrl}/api/fabric/resources/addresses?type=subscriber&page_size=100`, {
+      headers: { Authorization: auth },
+    });
+    if (addrRes.ok) {
+      const addrData = await addrRes.json();
+      const arr: Array<{ name?: string; display_name?: string; context?: string; resource_id?: string }> = addrData?.data || [];
+      const match = arr.find((a) => a.resource_id === sub.id);
+      if (match?.name) {
+        const ctx = (match.context || 'private').toLowerCase();
+        return `/${ctx}/${match.name}`;
+      }
+    }
+    return null;
+  } catch (e) {
+    console.error('[signalwire] getSubscriberAddressPath failed:', e);
+    return null;
+  }
+}
+
 export async function getQueueMembers(queueSid: string) {
   const res = await swFetch(`/Queues/${queueSid}/Members.json`);
   return res.json();

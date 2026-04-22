@@ -4,6 +4,7 @@ import { createServiceClient } from '../_shared/supabase.ts';
 import * as laml from '../_shared/laml.ts';
 import { formatMinuteAnnouncement } from '../_shared/utils.ts';
 import { enqueueCaller } from '../_shared/callQueue.ts';
+import { getSubscriberAddressPath } from '../_shared/signalwire.ts';
 
 serve(async (req) => {
   if (req.method !== 'POST') {
@@ -67,18 +68,17 @@ serve(async (req) => {
   }
 
   // ── Connect claimed rep: invoked by REST Update-Call from call-claim. Pulls
-  //    caller out of the <Enqueue> hold room and dials the rep's Call Fabric
-  //    subscriber via SIP (`sip:<identity>@<space>`), which routes the INVITE
-  //    to their browser SDK. Note: legacy <Client> does NOT work with SAT
-  //    subscribers — it's the old Verto client registry. ──
+  //    caller out of the <Enqueue> hold room and connects to the rep's Call
+  //    Fabric subscriber via SWML `connect: to: /private/<name>`. Plain SIP
+  //    URIs (`sip:identity@space`) do NOT reach SAT subscribers — the server
+  //    returns 408 because Fabric subscribers live on the WebRTC bus, not in
+  //    the SIP registrar. ──
   if (step === 'connect-claimed-rep') {
     const identity = url.searchParams.get('identity');
     const queueId = url.searchParams.get('queueId');
-    const elements: string[] = [];
     if (!identity) {
       console.error('[sw-inbound] connect-claimed-rep missing identity');
-      elements.push(laml.say('We are unable to connect you right now. Please try again.'));
-      elements.push(laml.hangup());
+      const elements = [laml.say('We are unable to connect you right now. Please try again.'), laml.hangup()];
       return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
     }
 
@@ -94,40 +94,67 @@ serve(async (req) => {
         .catch(() => {});
     }
 
-    const sipDomain = Deno.env.get('SIGNALWIRE_SPACE_URL');
-    console.log(`[sw-inbound] connect-claimed-rep identity=${identity} sipDomain=${sipDomain}`);
-    elements.push(laml.dialClient(identity, {
-      timeLimit: 14400,
-      action: `${baseUrl}/sw-inbound?step=queue-exit&queueId=${queueId ?? ''}`,
-      timeout: 30,
-      record: true,
-      callerId: from,
-      sipDomain,
-    }));
-    return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+    const addressPath = await getSubscriberAddressPath(identity);
+    console.log(`[sw-inbound] connect-claimed-rep identity=${identity} address=${addressPath}`);
+    if (!addressPath) {
+      const elements = [laml.say('We were unable to reach the representative. Please try again later.'), laml.hangup()];
+      return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+    }
+
+    const swml = {
+      version: '1.0.0',
+      sections: {
+        main: [
+          {
+            connect: {
+              to: addressPath,
+              from,
+              timeout: 30,
+              max_duration: 14400,
+              answer_on_bridge: true,
+              status_url: `${baseUrl}/sw-inbound?step=queue-exit&queueId=${queueId ?? ''}`,
+            },
+          },
+          { hangup: {} },
+        ],
+      },
+    };
+    return new Response(JSON.stringify(swml), { headers: { 'Content-Type': 'application/json' } });
   }
 
   // ── Outbound bridge: invoked when a customer answers a rep-initiated
-  //    outbound call. Dials the rep's SDK via SIP so the rep is bridged in. ──
+  //    outbound call. Connects the rep's Call Fabric subscriber via SWML. ──
   if (step === 'outbound-bridge') {
     const identity = url.searchParams.get('identity');
     const callId = url.searchParams.get('callId');
-    const elements: string[] = [];
     if (!identity) {
-      elements.push(laml.say('This call was initiated in error. Goodbye.'));
-      elements.push(laml.hangup());
+      const elements = [laml.say('This call was initiated in error. Goodbye.'), laml.hangup()];
       return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
     }
-    const sipDomain = Deno.env.get('SIGNALWIRE_SPACE_URL');
-    console.log(`[sw-inbound] outbound-bridge identity=${identity} callId=${callId}`);
-    elements.push(laml.dialClient(identity, {
-      timeLimit: 14400,
-      action: `${baseUrl}/sw-inbound?step=outbound-end&callId=${callId ?? ''}`,
-      timeout: 30,
-      record: true,
-      sipDomain,
-    }));
-    return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+    const addressPath = await getSubscriberAddressPath(identity);
+    console.log(`[sw-inbound] outbound-bridge identity=${identity} callId=${callId} address=${addressPath}`);
+    if (!addressPath) {
+      const elements = [laml.say('Your representative is unavailable. Goodbye.'), laml.hangup()];
+      return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+    }
+    const swml = {
+      version: '1.0.0',
+      sections: {
+        main: [
+          {
+            connect: {
+              to: addressPath,
+              timeout: 30,
+              max_duration: 14400,
+              answer_on_bridge: true,
+              status_url: `${baseUrl}/sw-inbound?step=outbound-end&callId=${callId ?? ''}`,
+            },
+          },
+          { hangup: {} },
+        ],
+      },
+    };
+    return new Response(JSON.stringify(swml), { headers: { 'Content-Type': 'application/json' } });
   }
 
   // ── Outbound end: after <Dial> completes on an outbound-bridge call. ──
