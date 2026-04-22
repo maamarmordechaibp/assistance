@@ -108,6 +108,16 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
             setCallerNumber(toNumber);
             addLog(`Dialing ${toNumber}...`);
             try {
+              // Prime mic permission before dial (SDK needs it)
+              try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                stream.getTracks().forEach(t => t.stop());
+              } catch (permErr) {
+                addLog(`Mic permission denied: ${permErr instanceof Error ? permErr.message : permErr}`);
+                setCallState('idle');
+                setCallerNumber('');
+                throw permErr;
+              }
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const call: any = await (clientInstance as any).dial({
                 to: toNumber,
@@ -285,6 +295,20 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
         return;
       }
       const { queue_name } = await claimRes.json();
+      // Prime the microphone BEFORE dial(): the SignalWire SDK's
+      // createDeviceWatcher() throws if getUserMedia has never run in
+      // this page. Also surfaces permission prompts promptly.
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        stream.getTracks().forEach(t => t.stop());
+        addLog('Mic permission ok');
+      } catch (permErr) {
+        addLog(`Mic permission denied: ${permErr instanceof Error ? permErr.message : permErr}`);
+        pendingRingRef.current = null;
+        setCallState('idle');
+        setCallerNumber('');
+        return;
+      }
       addLog(`Claimed. Dialing queue:${queue_name}...`);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const call: any = await clientInstance.dial({
@@ -357,9 +381,20 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
       }
       setMuted(!muted);
     } catch (err) {
-      console.error('Mute toggle error:', err);
+      // Queue-dialed calls don't expose mute capability on the SDK.
+      // Fall back to muting the local mic tracks directly.
+      try {
+        const pc = callRef.current?.peer?.instance as RTCPeerConnection | undefined;
+        pc?.getSenders().forEach((s: RTCRtpSender) => {
+          if (s.track && s.track.kind === 'audio') s.track.enabled = muted; // toggle
+        });
+        setMuted(!muted);
+        addLog(muted ? 'Unmuted (local)' : 'Muted (local)');
+      } catch {
+        console.warn('Mute unsupported:', err);
+      }
     }
-  }, [muted]);
+  }, [muted, addLog]);
 
   const toggleDeafen = useCallback(async () => {
     if (!callRef.current) return;
@@ -371,9 +406,18 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
       }
       setDeafened(!deafened);
     } catch (err) {
-      console.error('Deafen toggle error:', err);
+      // Fallback: mute/unmute the audio element locally.
+      try {
+        const root = audioRootRef.current;
+        const audios = root?.querySelectorAll('audio');
+        audios?.forEach(a => { (a as HTMLAudioElement).muted = !deafened; });
+        setDeafened(!deafened);
+        addLog(deafened ? 'Undeafened (local)' : 'Deafened (local)');
+      } catch {
+        console.warn('Deafen unsupported:', err);
+      }
     }
-  }, [deafened]);
+  }, [deafened, addLog]);
 
   // Color coding based on state
   const stateColors: Record<CallState, string> = {
