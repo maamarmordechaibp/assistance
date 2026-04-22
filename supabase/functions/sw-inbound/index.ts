@@ -67,12 +67,12 @@ serve(async (req) => {
     return new Response(laml.buildLamlResponse([laml.hangup()]), { headers: { 'Content-Type': 'application/xml' } });
   }
 
-  // ── Connect claimed rep: invoked by REST Update-Call from call-claim. Pulls
-  //    caller out of the <Enqueue> hold room and connects to the rep's Call
-  //    Fabric subscriber via SWML `connect: to: /private/<name>`. Plain SIP
-  //    URIs (`sip:identity@space`) do NOT reach SAT subscribers — the server
-  //    returns 408 because Fabric subscribers live on the WebRTC bus, not in
-  //    the SIP registrar. ──
+  // ── Connect claimed rep: invoked by REST Update-Call from call-claim.
+  //    Strategy: put the caller into a Conference room (LaML), and in
+  //    parallel originate a REST call to the rep's Call Fabric subscriber
+  //    whose answer URL returns LaML that joins the same conference. Both
+  //    legs meet in the room. This works from a LaML Compatibility handler
+  //    because we never rely on SWML verbs. ──
   if (step === 'connect-claimed-rep') {
     const identity = url.searchParams.get('identity');
     const queueId = url.searchParams.get('queueId');
@@ -82,8 +82,7 @@ serve(async (req) => {
       return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
     }
 
-    // Mark the queue row completed right away (the <Enqueue> action URL
-    // won't fire a second time because we REST-redirected).
+    // Mark the queue row completed right away.
     if (queueId) {
       await supabase
         .from('call_queue')
@@ -94,32 +93,82 @@ serve(async (req) => {
         .catch(() => {});
     }
 
-    const addressPath = await getSubscriberAddressPath(identity);
-    console.log(`[sw-inbound] connect-claimed-rep identity=${identity} address=${addressPath}`);
-    if (!addressPath) {
-      const elements = [laml.say('We were unable to reach the representative. Please try again later.'), laml.hangup()];
-      return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
-    }
+    // Unique room name. queueId is already unique per call.
+    const roomName = `conf-${queueId || callSid}`;
+    const fromNumber = Deno.env.get('SIGNALWIRE_FROM_NUMBER') || '+18459357587';
 
-    const swml = {
-      version: '1.0.0',
-      sections: {
-        main: [
-          {
-            connect: {
-              to: addressPath,
-              from,
-              timeout: 30,
-              max_duration: 14400,
-              answer_on_bridge: true,
-              status_url: `${baseUrl}/sw-inbound?step=queue-exit&queueId=${queueId ?? ''}`,
-            },
-          },
-          { hangup: {} },
-        ],
-      },
-    };
-    return new Response(JSON.stringify(swml), { headers: { 'Content-Type': 'application/json' } });
+    // Kick off the rep-leg origination in the background so we return the
+    // caller's LaML immediately. We originate TO the Fabric address so the
+    // browser SDK receives the invite via its existing online() handler.
+    const repJoinUrl = `${baseUrl}/sw-inbound?step=rep-conference-join&room=${encodeURIComponent(roomName)}&callerFrom=${encodeURIComponent(from || '')}`;
+    (async () => {
+      try {
+        // Lazy-import to avoid circular / header issues
+        const { createCall } = await import('../_shared/signalwire.ts');
+        // Try the Call Fabric address path first (no + prefix, starts with /).
+        const fabricAddress = `/private/${identity}`;
+        const result = await createCall({
+          to: fabricAddress,
+          from: fromNumber,
+          url: repJoinUrl,
+          statusCallback: `${baseUrl}/sw-inbound?step=rep-leg-status&room=${encodeURIComponent(roomName)}`,
+        });
+        console.log('[sw-inbound] rep-leg createCall result:', JSON.stringify(result));
+        await supabase.from('call_traces').insert({
+          call_sid: callSid,
+          step: 'rep-leg-originate',
+          from_number: from,
+          details: { room: roomName, identity, result },
+        }).catch(() => {});
+      } catch (err) {
+        console.error('[sw-inbound] rep-leg createCall failed:', err);
+      }
+    })();
+
+    // Caller LaML: join the conference with hold music while the rep
+    // leg is being originated. endConferenceOnExit=true on the caller so
+    // when the caller hangs up, the room tears down.
+    const elements = [
+      laml.say('Connecting you to your representative now. Please hold.'),
+      laml.dialConference(roomName, {
+        startConferenceOnEnter: false,
+        endConferenceOnExit: true,
+        waitUrl: '',
+        beep: false,
+        timeLimit: 14400,
+        statusCallback: `${baseUrl}/sw-inbound?step=queue-exit&queueId=${queueId ?? ''}`,
+      }),
+      laml.hangup(),
+    ];
+    return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+  }
+
+  // ── Rep conference join: URL the rep's subscriber hits when their
+  //    browser auto-answers the originated call. Returns LaML joining the
+  //    conference room. startConferenceOnEnter=true so the room "opens"
+  //    as soon as the rep is in. ──
+  if (step === 'rep-conference-join') {
+    const room = url.searchParams.get('room');
+    const callerFrom = url.searchParams.get('callerFrom') || '';
+    if (!room) {
+      return new Response(laml.buildLamlResponse([laml.say('Room parameter missing. Goodbye.'), laml.hangup()]), { headers: { 'Content-Type': 'application/xml' } });
+    }
+    const elements = [
+      laml.say(callerFrom ? `Incoming call from ${callerFrom.replace(/\+?1?/, '').split('').join(' ')}. Connecting now.` : 'Incoming call. Connecting now.'),
+      laml.dialConference(room, {
+        startConferenceOnEnter: true,
+        endConferenceOnExit: true,
+        beep: false,
+        timeLimit: 14400,
+      }),
+      laml.hangup(),
+    ];
+    return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+  }
+
+  // ── Rep leg status (diagnostic): fires throughout the rep leg lifecycle. ──
+  if (step === 'rep-leg-status') {
+    return new Response(laml.buildLamlResponse([laml.hangup()]), { headers: { 'Content-Type': 'application/xml' } });
   }
 
   // ── Outbound bridge: invoked when a customer answers a rep-initiated

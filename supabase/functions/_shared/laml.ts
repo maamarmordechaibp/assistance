@@ -134,6 +134,44 @@ export function dialMultipleClients(
   return `  <Dial ${attrs.join(' ')}>\n${nouns}\n  </Dial>`;
 }
 
+/** <Dial><Conference>roomName</Conference></Dial>. Used to bridge a caller
+ *  and a rep into the same audio room. `startOnEnter`/`endOnExit` default to
+ *  false so each party joins and only the combined hangup ends it. */
+export function dialConference(
+  roomName: string,
+  opts: {
+    startConferenceOnEnter?: boolean;
+    endConferenceOnExit?: boolean;
+    waitUrl?: string;
+    beep?: boolean | 'onEnter' | 'onExit';
+    record?: boolean;
+    maxParticipants?: number;
+    action?: string;
+    timeLimit?: number;
+    callerId?: string;
+    statusCallback?: string;
+  } = {}
+): string {
+  const confAttrs: string[] = [];
+  if (opts.startConferenceOnEnter !== undefined) confAttrs.push(`startConferenceOnEnter="${opts.startConferenceOnEnter}"`);
+  if (opts.endConferenceOnExit !== undefined) confAttrs.push(`endConferenceOnExit="${opts.endConferenceOnExit}"`);
+  if (opts.waitUrl !== undefined) confAttrs.push(`waitUrl="${escapeXml(opts.waitUrl)}"`);
+  if (opts.beep !== undefined) confAttrs.push(`beep="${opts.beep}"`);
+  if (opts.record) confAttrs.push('record="record-from-start"');
+  if (opts.maxParticipants) confAttrs.push(`maxParticipants="${opts.maxParticipants}"`);
+
+  const dialAttrs: string[] = [];
+  if (opts.action) dialAttrs.push(`action="${escapeXml(opts.action)}"`);
+  if (opts.timeLimit) dialAttrs.push(`timeLimit="${opts.timeLimit}"`);
+  if (opts.callerId) dialAttrs.push(`callerId="${escapeXml(opts.callerId)}"`);
+  if (opts.statusCallback) {
+    dialAttrs.push(`statusCallback="${escapeXml(opts.statusCallback)}"`);
+    dialAttrs.push('statusCallbackEvent="initiated ringing answered completed"');
+  }
+
+  return `  <Dial${dialAttrs.length ? ' ' + dialAttrs.join(' ') : ''}>\n    <Conference${confAttrs.length ? ' ' + confAttrs.join(' ') : ''}>${escapeXml(roomName)}</Conference>\n  </Dial>`;
+}
+
 export function enqueue(
   queueName: string,
   waitUrlOrOpts?: string | { waitUrl?: string; action?: string; method?: string }

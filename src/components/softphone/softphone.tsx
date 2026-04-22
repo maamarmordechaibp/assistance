@@ -463,18 +463,20 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
       }
       const claimData = await claimRes.json().catch(() => ({}));
       addLog(`Claimed (bridge_initiated=${claimData.bridge_initiated}). Waiting for invite…`);
-      // Safety timeout: if the SDK doesn't receive the INVITE within 20s,
-      // something upstream failed — reset so the rep can try again.
+      // Safety timeout: if the SDK doesn't receive the INVITE within 45s,
+      // something upstream failed — reset so the rep can try again. (Bumped
+      // from 20s because the conference-bridge origination path can take
+      // a few extra seconds for the REST round-trip + SDK invite.)
       if (inviteWaitTimerRef.current) clearTimeout(inviteWaitTimerRef.current);
       inviteWaitTimerRef.current = setTimeout(() => {
         if (awaitingInviteRef.current) {
           awaitingInviteRef.current = false;
-          addLog('Timeout waiting for invite (20s). Aborting.');
+          addLog('Timeout waiting for invite (45s). Aborting.');
           pendingRingRef.current = null;
           setCallState('idle');
           setCallerNumber('');
         }
-      }, 20000);
+      }, 45000);
     } catch (err) {
       console.error('Answer error:', err);
       awaitingInviteRef.current = false;
