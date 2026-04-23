@@ -657,6 +657,7 @@ export default function RepDashboard() {
       if (!url) throw new Error('No live URL returned');
       setRbLiveUrl(url);
       setRbOpen(true);
+      setRbFullscreen(true);
       toast.success('Your browser is ready');
       void refreshRbTabs();
     } catch (err) {
@@ -1209,7 +1210,7 @@ export default function RepDashboard() {
 
           {/* Customer Browser (Browserbase) — only visible while on a call */}
           {activeCall && customer && (
-            <div className={`bg-white rounded-xl shadow-sm border ${bbFullscreen ? 'fixed inset-2 z-50 flex flex-col p-3' : 'p-4'}`}>
+            <div className={`bg-white rounded-xl shadow-sm border ${bbFullscreen ? 'fixed inset-0 z-50 flex flex-col p-3 rounded-none' : 'p-4'}`}>
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-2">
                   <Globe className="w-4 h-4" />
@@ -1376,7 +1377,7 @@ export default function RepDashboard() {
           </div>
 
           {/* Rep's personal browser — always available, outside customer calls */}
-          <div className={`bg-white rounded-xl shadow-sm border ${rbFullscreen ? 'fixed inset-2 z-50 flex flex-col p-3' : 'p-4'}`}>
+          <div className={`bg-white rounded-xl shadow-sm border ${rbFullscreen ? 'fixed inset-0 z-50 flex flex-col p-3 rounded-none' : 'p-4'}`}>
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-2">
                 <Globe className="w-4 h-4" />
@@ -1453,7 +1454,7 @@ export default function RepDashboard() {
                 )}
                 <iframe
                   src={rbActiveTabId ? (rbTabs.find(t => t.id === rbActiveTabId)?.debuggerFullscreenUrl || rbLiveUrl) : rbLiveUrl}
-                  className={`w-full rounded-lg border bg-gray-50 ${rbFullscreen ? 'flex-1 min-h-0' : 'h-[600px]'}`}
+                  className={`w-full rounded-lg border bg-gray-50 ${rbFullscreen ? 'flex-1 min-h-0' : 'h-[85vh]'}`}
                   sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-popups-to-escape-sandbox"
                   allow="clipboard-read; clipboard-write; autoplay; microphone; camera"
                 />
