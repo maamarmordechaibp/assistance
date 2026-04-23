@@ -185,28 +185,72 @@ serve(async (req) => {
       } catch { return `AI: ${m.content}`; }
     }).join('\n');
 
+    // Compose a concrete fallback from the raw caller answers so even when
+    // OpenAI fails or returns junk JSON, the rep still sees what the caller
+    // actually said — instead of useless "Customer needs help finding a product".
+    const callerAnswers = msgs
+      .filter(m => m.role === 'user')
+      .map(m => m.content.trim())
+      .filter(Boolean);
+    const concreteFallback = callerAnswers.length
+      ? `Caller said: ${callerAnswers.join(' | ')}`
+      : 'Caller did not provide details during intake.';
+
+    console.log('[sw-ai-intake] generateBrief — transcript:\n' + transcript);
+
     const payload = [
       { role: 'system', content: BRIEF_PROMPT },
       { role: 'user', content: `Full intake conversation:\n${transcript}\n\nGenerate the brief now. Combine every detail the caller gave across the whole conversation.` },
     ];
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: payload,
-        response_format: { type: 'json_object' },
-        temperature: 0.3,
-        max_tokens: 500,
-      }),
-    });
+    let res: Response;
+    try {
+      res = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'gpt-4o',
+          messages: payload,
+          response_format: { type: 'json_object' },
+          temperature: 0.3,
+          max_tokens: 500,
+        }),
+      });
+    } catch (err) {
+      console.error('[sw-ai-intake] generateBrief network error:', err);
+      return { done: true as const, category: 'other', brief: concreteFallback, suggestions: {} };
+    }
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      console.error(`[sw-ai-intake] generateBrief OpenAI ${res.status}:`, errText.slice(0, 500));
+      return { done: true as const, category: 'other', brief: concreteFallback, suggestions: {} };
+    }
+
     const data = await res.json();
-    const result = JSON.parse(data.choices?.[0]?.message?.content || '{}');
+    const raw = data.choices?.[0]?.message?.content || '';
+    console.log('[sw-ai-intake] generateBrief raw response:', raw.slice(0, 800));
+
+    let result: Record<string, unknown> = {};
+    try {
+      result = JSON.parse(raw);
+    } catch (err) {
+      console.error('[sw-ai-intake] generateBrief JSON parse error:', err);
+      // Try to extract a JSON object inside the raw string (sometimes models wrap it)
+      const m = raw.match(/\{[\s\S]*\}/);
+      if (m) {
+        try { result = JSON.parse(m[0]); } catch { /* give up */ }
+      }
+    }
+
+    const brief = (typeof result.brief === 'string' && result.brief.trim().length > 5)
+      ? result.brief
+      : concreteFallback;
+
     return {
       done: true as const,
-      category: result.category || 'other',
-      brief: result.brief || 'Customer needs assistance finding a product.',
-      suggestions: result.suggestions || {},
+      category: (result.category as string) || 'other',
+      brief,
+      suggestions: (result.suggestions as GptDoneResult['suggestions']) || {},
     };
   }
 
