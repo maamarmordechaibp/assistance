@@ -64,15 +64,19 @@ serve(async (req) => {
     });
   }
 
-  // Look up this rep's SignalWire identity so the LaML redirect knows where
-  // to deliver the INVITE.
+  // Look up this rep so the claim response can tell the UI how the bridge
+  // is being delivered (PSTN cell vs SIP vs softphone). For PSTN/SIP there
+  // is no browser INVITE, so the UI should hydrate its active-call panel
+  // directly from the response instead of waiting for an invite.
   const { data: rep } = await service
     .from('reps')
-    .select('id, email')
+    .select('id, email, phone_e164, sip_uri')
     .eq('id', user.id)
     .maybeSingle();
 
   const identity = rep?.email ? toSwIdentity(rep.email) : null;
+  const bridgeMode: 'sip' | 'pstn' | 'browser' =
+    rep?.sip_uri ? 'sip' : rep?.phone_e164 ? 'pstn' : 'browser';
 
   // Redirect the caller to our connect-claimed-rep LaML endpoint. It looks
   // up the rep's phone_e164 / sip_uri and <Dial>s them directly.
@@ -93,6 +97,54 @@ serve(async (req) => {
     console.error('[call-claim] updateCall failed:', err);
   }
 
+  // Hydrate: pull the matching calls row (with AI brief) and recent customer
+  // context so the rep UI can show everything the moment they pick up the
+  // phone — no extra round trips.
+  let callRow: Record<string, unknown> | null = null;
+  let customer: Record<string, unknown> | null = null;
+  let recentFindings: Array<Record<string, unknown>> = [];
+  let credentialsCount = 0;
+
+  if (data.call_sid) {
+    const { data: c } = await service
+      .from('calls')
+      .select('id, call_sid, customer_id, inbound_phone, ai_intake_brief, ai_intake_completed, started_at, connected_at')
+      .eq('call_sid', data.call_sid)
+      .maybeSingle();
+    callRow = (c as Record<string, unknown> | null) ?? null;
+    // Mark connected_at so the rep-side timer starts immediately.
+    if (callRow && !callRow.connected_at) {
+      await service.from('calls')
+        .update({ connected_at: new Date().toISOString(), rep_id: user.id })
+        .eq('call_sid', data.call_sid);
+      callRow.connected_at = new Date().toISOString();
+      callRow.rep_id = user.id;
+    }
+  }
+
+  if (data.customer_id) {
+    const { data: cust } = await service
+      .from('customers')
+      .select('id, full_name, primary_phone, email, current_balance_minutes, total_minutes_purchased, preferred_language, notes')
+      .eq('id', data.customer_id)
+      .maybeSingle();
+    customer = cust as Record<string, unknown> | null;
+
+    const { data: findings } = await service
+      .from('call_findings')
+      .select('description, item_url, item_price, item_platform, item_notes, created_at')
+      .eq('customer_id', data.customer_id)
+      .order('created_at', { ascending: false })
+      .limit(5);
+    recentFindings = (findings ?? []) as Array<Record<string, unknown>>;
+
+    const { count } = await service
+      .from('customer_credentials')
+      .select('id', { count: 'exact', head: true })
+      .eq('customer_id', data.customer_id);
+    credentialsCount = count ?? 0;
+  }
+
   return new Response(JSON.stringify({
     queue_name: data.queue_name,
     call_sid: data.call_sid,
@@ -100,5 +152,10 @@ serve(async (req) => {
     customer_id: data.customer_id,
     identity,
     bridge_initiated: bridgeInitiated,
+    bridge_mode: bridgeMode,
+    call: callRow,
+    customer,
+    recent_findings: recentFindings,
+    credentials_count: credentialsCount,
   }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 });

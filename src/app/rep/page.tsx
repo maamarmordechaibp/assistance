@@ -977,6 +977,25 @@ export default function RepDashboard() {
               identity={signalwireIdentity}
               repId={repId}
               onCallEnded={handleCallEnded}
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              onCallClaimed={(payload: any) => {
+                // Hydrate the active-call panel immediately so the rep sees
+                // the AI brief + customer context the moment they click
+                // Answer (i.e. before they even pick up the cellphone).
+                if (payload?.call) {
+                  setActiveCall(payload.call as ActiveCall);
+                }
+                if (payload?.customer_id) {
+                  loadCustomer(payload.customer_id);
+                }
+                const brief = payload?.call?.ai_intake_brief as IntakeBrief | null | undefined;
+                if (brief?.summary) {
+                  toast.info(`AI Brief: ${brief.summary.slice(0, 120)}${brief.summary.length > 120 ? '…' : ''}`, {
+                    duration: 10000,
+                    icon: '🤖',
+                  });
+                }
+              }}
               onReady={(makeCall) => {
                 makeCallFnRef.current = makeCall;
                 // Generic global hook used by any rep subpage

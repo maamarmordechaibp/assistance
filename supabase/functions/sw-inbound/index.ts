@@ -361,6 +361,41 @@ serve(async (req) => {
     const elements: string[] = [];
     const category = url.searchParams.get('category') || '';
 
+    // ── Balance gate: a caller with no package / 0 balance should NOT be
+    //    routed to a rep. They get offered a package or sent to voicemail. ──
+    if (customerId) {
+      const { data: cust } = await supabase
+        .from('customers')
+        .select('id, current_balance_minutes, total_minutes_purchased')
+        .eq('id', customerId)
+        .maybeSingle();
+      const { data: gateSetting } = await supabase
+        .from('admin_settings')
+        .select('value')
+        .eq('key', 'first_time_zero_balance')
+        .maybeSingle();
+      const gateMode = String(gateSetting?.value ?? 'warn'); // allow | warn | block
+      const minutes = cust?.current_balance_minutes ?? 0;
+      const hasEverPurchased = (cust?.total_minutes_purchased ?? 0) > 0;
+
+      if (minutes <= 0 && gateMode === 'block') {
+        // No balance, no package yet → offer to buy a package now.
+        elements.push(laml.say(hasEverPurchased
+          ? 'Your account has no minutes remaining. Please add minutes to continue.'
+          : 'To speak with a representative you will need an active minutes package. Let\'s get you set up.'));
+        elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=balance-menu&customerId=${customerId}`));
+        return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+      }
+      if (minutes <= 0 && gateMode === 'warn') {
+        elements.push(laml.say('Heads up: your account has no minutes remaining. Your representative may ask you to add a package before the call can continue.'));
+        elements.push(laml.pause(1));
+      }
+    }
+
+    // ── Recording disclosure (moved here so first-time IVR greeting is faster)
+    elements.push(laml.say('This call may be recorded for quality assurance and training purposes.'));
+    elements.push(laml.pause(1));
+
     // Try specialty-matched rep first, then fall back to any available rep
     let repsToCall: Array<{ id: string; full_name: string; email: string; status: string }> = [];
     if (category) {
@@ -692,43 +727,51 @@ serve(async (req) => {
     });
 
     const isNewCaller = customer.full_name.startsWith('Caller ');
-    if (isNewCaller) {
-      // Main Greeting — natural cadence via short lines with brief pauses
-      elements.push(...laml.sayLines([
-        'Thank you for calling Offline.',
-        "Stay offline — we'll handle the online.",
-        'Please listen carefully and select from the following options.',
-      ]));
-    } else {
-      elements.push(...laml.sayLines([
-        `Welcome back, ${customer.full_name}.`,
-        "Stay offline — we'll handle the online.",
-      ]));
-    }
+    const isReturningCaller = !isNewCaller;
 
-    if (announcementEnabled) {
-      const announcement = formatMinuteAnnouncement(customer.current_balance_minutes, announcementText);
-      elements.push(laml.say(announcement));
-      elements.push(laml.pause(1));
-    }
+    // Build greeting lines (played inside a <Gather> so caller can barge-in
+    // with a digit instead of listening to the whole thing).
+    const greetingLines = isNewCaller
+      ? [
+          'Thank you for calling Offline.',
+          "Stay offline — we'll handle the online.",
+          'Please listen carefully and select from the following options.',
+        ]
+      : [
+          `Welcome back, ${customer.full_name}.`,
+          "Stay offline — we'll handle the online.",
+        ];
 
-    // ── Proactive low-balance top-up offer ──
+    const announcementText0 = (settingsMap.minute_announcement_text as string) || 'You currently have {minutes} minutes remaining.';
+    const announcement = announcementEnabled
+      ? formatMinuteAnnouncement(customer.current_balance_minutes, announcementText0)
+      : '';
+
     const lowBalanceThreshold = Number(settingsMap.low_balance_threshold) || 10;
-    const isReturningCaller = !customer.full_name.startsWith('Caller ');
+
     if (customer.current_balance_minutes > 0 && customer.current_balance_minutes <= lowBalanceThreshold) {
+      // Low-balance path: greet + balance + low-balance choice, all inside
+      // a single <Gather> so caller can press 1/2 at any point.
+      const sayLines = [...greetingLines];
+      if (announcement) sayLines.push(announcement);
+      sayLines.push('Your balance is getting low. Press 1 to add minutes now, or press 2 to continue.');
       elements.push(
         laml.gather(
           { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=low-balance-choice&customerId=${customer.id}`, timeout: 8 },
-          [laml.say('Your balance is getting low. Press 1 to add minutes now, or press 2 to continue.')]
+          laml.sayLines(sayLines)
         )
       );
       elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=menu&customerId=${customer.id}`));
     } else if (isReturningCaller) {
-      // Returning caller fast-path: single press to skip to AI intake
+      // Returning-caller fast-path: greet + balance + "press 1 for rep" all
+      // inside one <Gather> so any digit barge-in jumps straight to menu.
+      const sayLines = [...greetingLines];
+      if (announcement) sayLines.push(announcement);
+      sayLines.push('Press 1 to speak with a representative, or stay on the line for more options.');
       elements.push(
         laml.gather(
           { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=menu&customerId=${customer.id}`, timeout: 6 },
-          [laml.say('Press 1 to speak with a representative, or stay on the line for more options.')]
+          laml.sayLines(sayLines)
         )
       );
       // Timeout fallback — show full menu
@@ -736,8 +779,21 @@ serve(async (req) => {
       elements.push(laml.say('No input received. Connecting you to a representative.'));
       elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=connect-rep&customerId=${customer.id}`));
     } else {
-      // New caller — full IVR menu
-      elements.push(buildMenuGather(baseUrl, customer));
+      // New caller — greet + balance + full menu, all inside one <Gather>.
+      const sayLines = [...greetingLines];
+      if (announcement) sayLines.push(announcement);
+      sayLines.push(
+        'To connect with a live agent, press 0.',
+        'For company information, press 1.',
+        'To hear your balance or add more minutes, press 2.',
+        'To update your information or securely save your credit card details, press 3.',
+        'To leave a message for the Yiddish admin office, press 4.',
+        'To hear our terms, conditions, and security measures, press 7.',
+      );
+      elements.push(laml.gather(
+        { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=menu&customerId=${customer.id}`, timeout: 10 },
+        laml.sayLines(sayLines)
+      ));
       elements.push(laml.say('No input received. Connecting you to a representative.'));
       elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=connect-rep&customerId=${customer.id}`));
     }

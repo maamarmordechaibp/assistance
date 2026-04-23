@@ -46,6 +46,11 @@ interface SoftphoneProps {
   repId: string | null;
   onCallStarted?: (callId: string, fromNumber: string) => void;
   onCallEnded?: () => void;
+  /** Fires when a queued call is claimed. Payload includes the enriched
+   *  call / customer / AI brief so the parent can show everything right
+   *  away — critical for PSTN/SIP bridging where the browser never rings. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  onCallClaimed?: (payload: any) => void;
   /** Called once the client is ready — receives a function to initiate an outbound call */
   onReady?: (makeCall: (toNumber: string) => Promise<void>) => void;
 }
@@ -59,7 +64,7 @@ interface PendingQueueRing {
   callerName: string | null;
 }
 
-export default function Softphone({ token, projectId, host, identity, repId, onCallStarted, onCallEnded, onReady }: SoftphoneProps) {
+export default function Softphone({ token, projectId, host, identity, repId, onCallStarted, onCallEnded, onCallClaimed, onReady }: SoftphoneProps) {
   const [callState, setCallState] = useState<CallState>('idle');
   const [muted, setMuted] = useState(false);
   const [deafened, setDeafened] = useState(false);
@@ -462,7 +467,32 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
         return;
       }
       const claimData = await claimRes.json().catch(() => ({}));
-      addLog(`Claimed (bridge_initiated=${claimData.bridge_initiated}). Waiting for invite…`);
+      addLog(`Claimed (bridge_initiated=${claimData.bridge_initiated}, mode=${claimData.bridge_mode}). ${claimData.bridge_mode === 'browser' ? 'Waiting for invite…' : 'Forwarding to your phone — pick up there.'}`);
+
+      // Hand the enriched claim payload up to the parent so it can render
+      // the AI brief, customer context, credentials, findings etc. right
+      // away — even before the rep answers their cell/SIP.
+      try { onCallClaimed?.(claimData); } catch (err) { addLog('onCallClaimed error: ' + (err instanceof Error ? err.message : err)); }
+
+      // For PSTN or SIP bridge modes the browser never receives an INVITE —
+      // audio lives entirely on the rep's cell / deskphone. Don't arm the
+      // invite-wait timer (which would otherwise expire after 45s and reset
+      // the UI while the rep is actively on the phone).
+      if (claimData.bridge_mode === 'pstn' || claimData.bridge_mode === 'sip') {
+        awaitingInviteRef.current = false;
+        if (inviteWaitTimerRef.current) {
+          clearTimeout(inviteWaitTimerRef.current);
+          inviteWaitTimerRef.current = null;
+        }
+        setCallState('active');
+        setCallerNumber(ring.fromNumber);
+        pendingRingRef.current = null;
+        if (claimData.call?.id) {
+          try { onCallStarted?.(claimData.call.id, ring.fromNumber); } catch { /* noop */ }
+        }
+        return;
+      }
+      // Browser softphone path — arm the invite-wait timer.
       // Safety timeout: if the SDK doesn't receive the INVITE within 45s,
       // something upstream failed — reset so the rep can try again. (Bumped
       // from 20s because the conference-bridge origination path can take
@@ -486,7 +516,7 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
       setCallState('idle');
       setCallerNumber('');
     }
-  }, [addLog]);
+  }, [addLog, onCallClaimed, onCallStarted]);
 
   const hangup = useCallback(async () => {
     try {
