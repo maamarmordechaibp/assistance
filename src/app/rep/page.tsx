@@ -490,9 +490,10 @@ export default function RepDashboard() {
           repNotes,
           taskCategoryId: selectedCategory || undefined,
           outcomeStatus: selectedOutcome || undefined,
+          endCall: true,
         }),
       });
-      toast.success('Call ended and notes saved');
+      toast.success('Call ended. AI analysis will appear in call history shortly.');
     } catch {
       toast.error('Failed to save call notes');
     }
@@ -673,11 +674,19 @@ export default function RepDashboard() {
                           : 'New caller — no package yet'}
                       </span>
                     </div>
-                    <p className="text-sm text-red-700">
+                    <p className="text-sm text-red-700 mb-3">
                       {(customer.total_minutes_purchased ?? 0) > 0
                         ? 'This customer has $0 balance. Offer to top up before starting work.'
                         : 'This is a first-time caller with no package. Offer a package and collect payment before starting work.'}
                     </p>
+                    <a
+                      href={`/rep/payments?customerId=${customer.id}&lock=1`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 px-3 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700"
+                    >
+                      Process Payment →
+                    </a>
                   </div>
                 )}
 

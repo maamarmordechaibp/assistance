@@ -1,7 +1,7 @@
 // Edge Function: calls (GET list, PATCH update)
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts';
 import { corsHeaders, handleCors } from '../_shared/cors.ts';
-import { createUserClient, getUser } from '../_shared/supabase.ts';
+import { createUserClient, createServiceClient, getUser } from '../_shared/supabase.ts';
 
 serve(async (req) => {
   const cors = handleCors(req);
@@ -51,8 +51,91 @@ serve(async (req) => {
     if (updates.flagStatus !== undefined) dbUpdates.flag_status = updates.flagStatus;
     if (updates.flagReason !== undefined) dbUpdates.flag_reason = updates.flagReason;
 
+    // ── If this is a call-ended PATCH, stamp ended_at + duration and kick
+    //    off ai-analyze asynchronously. We detect "ending" heuristically as
+    //    any PATCH that includes outcomeStatus OR an explicit endCall:true. ──
+    const isEndingCall = !!updates.endCall || updates.outcomeStatus !== undefined;
+
+    if (isEndingCall) {
+      // Use service client to read connected_at + to stamp end-time fields
+      // (rep RLS may restrict some of these columns).
+      const service = createServiceClient();
+      const { data: existing } = await service.from('calls').select('connected_at, started_at, ended_at').eq('id', id).maybeSingle();
+      if (existing && !existing.ended_at) {
+        const endedAt = new Date();
+        dbUpdates.ended_at = endedAt.toISOString();
+        const startMs = existing.connected_at
+          ? new Date(existing.connected_at).getTime()
+          : existing.started_at
+            ? new Date(existing.started_at).getTime()
+            : endedAt.getTime();
+        const secs = Math.max(0, Math.round((endedAt.getTime() - startMs) / 1000));
+        dbUpdates.total_duration_seconds = secs;
+      }
+    }
+
     const { data, error } = await supabase.from('calls').update(dbUpdates).eq('id', id).select().single();
     if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+
+    // ── Post-call: synthesise a transcript from rep notes + AI brief +
+    //    findings, then fire-and-forget ai-analyze so the call history gets
+    //    a report even without real audio transcription. ──
+    if (isEndingCall) {
+      try {
+        const service = createServiceClient();
+        const { data: full } = await service.from('calls')
+          .select('id, rep_notes, ai_intake_brief, customer_id, transcript_text')
+          .eq('id', id)
+          .maybeSingle();
+        if (full) {
+          let transcript = full.transcript_text || '';
+          if (!transcript) {
+            const parts: string[] = [];
+            const brief = full.ai_intake_brief as Record<string, unknown> | null;
+            if (brief) {
+              const summary = brief.summary as string | undefined;
+              const category = brief.category as string | undefined;
+              if (summary) parts.push(`AI INTAKE SUMMARY (category=${category || 'other'}): ${summary}`);
+              const sug = brief.suggestions as Record<string, unknown> | undefined;
+              if (sug) {
+                if (Array.isArray(sug.search_terms) && sug.search_terms.length) parts.push(`Intake search terms: ${(sug.search_terms as string[]).join(', ')}`);
+                if (typeof sug.rep_tip === 'string') parts.push(`Intake rep tip: ${sug.rep_tip}`);
+              }
+            }
+            if (full.rep_notes) parts.push(`REPRESENTATIVE NOTES:\n${full.rep_notes}`);
+            const { data: findings } = await service.from('call_findings')
+              .select('description, item_url, item_price, item_platform, item_notes')
+              .eq('call_id', id);
+            if (findings && findings.length) {
+              parts.push('FINDINGS LOGGED BY REP:');
+              for (const f of findings) {
+                parts.push(`- ${f.description}${f.item_price ? ` (${f.item_price})` : ''}${f.item_platform ? ` on ${f.item_platform}` : ''}${f.item_url ? ` — ${f.item_url}` : ''}${f.item_notes ? ` — ${f.item_notes}` : ''}`);
+              }
+            }
+            transcript = parts.join('\n\n');
+          }
+
+          if (transcript.trim().length > 0) {
+            // Persist the synthesised transcript so ai-analyze sees it.
+            await service.from('calls').update({ transcript_text: transcript }).eq('id', id);
+
+            // Fire-and-forget ai-analyze. Don't await — response to rep should be instant.
+            const fnUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/ai-analyze`;
+            fetch(fnUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+              },
+              body: JSON.stringify({ callId: id }),
+            }).catch(err => console.error('[calls] ai-analyze kickoff failed:', err));
+          }
+        }
+      } catch (err) {
+        console.error('[calls] post-call processing error:', err);
+      }
+    }
+
     return new Response(JSON.stringify(data), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 

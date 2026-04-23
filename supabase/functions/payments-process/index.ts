@@ -18,7 +18,18 @@ serve(async (req) => {
   }
 
   const body = await req.json();
-  const { customerId, packageId, token, cardNumber, expiration, cvv } = body;
+  // Accept both naming conventions: legacy {expiration, cvv} and the rep
+  // dashboard's {cardExp, cardCvv, cardName}.
+  const {
+    customerId, packageId, token,
+    cardNumber,
+    expiration, cvv,
+    cardExp, cardCvv, cardName,
+    saveCard,
+  } = body;
+  const exp = expiration || cardExp;
+  const cv = cvv || cardCvv;
+  const holderName = cardName || body.customerName;
 
   if (!customerId || !packageId) {
     return new Response(JSON.stringify({ error: 'customerId and packageId required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
@@ -37,9 +48,16 @@ serve(async (req) => {
     const invoice = `pkg-${pkg.id}-${Date.now()}`;
 
     if (token) {
-      paymentResult = await processTokenSale({ amount: pkg.price, token, invoice });
-    } else if (cardNumber && expiration && cvv) {
-      paymentResult = await processCreditCardSale({ amount: pkg.price, cardNumber, expiration, cvv, invoice });
+      paymentResult = await processTokenSale({ amount: pkg.price, token, invoice, customerName: holderName });
+    } else if (cardNumber && exp && cv) {
+      paymentResult = await processCreditCardSale({
+        amount: pkg.price,
+        cardNumber,
+        expiration: exp,
+        cvv: cv,
+        invoice,
+        customerName: holderName,
+      });
     } else {
       return new Response(JSON.stringify({ error: 'Provide either token or card details (cardNumber, expiration, cvv)' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
@@ -80,7 +98,50 @@ serve(async (req) => {
         payment_id: payment?.id,
       });
 
-      return new Response(JSON.stringify({ success: true, payment, message: `${pkg.minutes} minutes added` }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      // ── Save card on file if requested. The token was returned by Sola
+      //   above; reps will only ever see the masked last4 + brand. ──
+      let savedMethodId: string | null = null;
+      if (saveCard && paymentResult.xToken && cardNumber) {
+        const last4 = String(cardNumber).replace(/\D/g, '').slice(-4);
+        const brand = paymentResult.xCardType || null;
+        const { data: cpm } = await supabase
+          .from('customer_payment_methods')
+          .insert({
+            customer_id: customerId,
+            sola_token: paymentResult.xToken,
+            card_brand: brand,
+            card_last4: last4,
+            card_exp: exp,
+            cardholder_name: holderName,
+            created_by: user.id,
+            // first card on file becomes default automatically
+            is_default: true,
+          })
+          .select('id')
+          .single();
+        savedMethodId = cpm?.id ?? null;
+        // Demote any older default if this isn't the first card.
+        if (savedMethodId) {
+          await supabase
+            .from('customer_payment_methods')
+            .update({ is_default: false })
+            .eq('customer_id', customerId)
+            .neq('id', savedMethodId);
+          // Then re-mark this as default.
+          await supabase
+            .from('customer_payment_methods')
+            .update({ is_default: true })
+            .eq('id', savedMethodId);
+        }
+      }
+
+      return new Response(JSON.stringify({
+        success: true,
+        payment,
+        minutesAdded: pkg.minutes,
+        savedPaymentMethodId: savedMethodId,
+        message: `${pkg.minutes} minutes added`,
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     } else {
       await supabase.from('payments').insert({
         customer_id: customerId,

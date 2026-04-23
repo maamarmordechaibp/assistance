@@ -50,27 +50,28 @@ OUTPUT FORMAT — respond with valid JSON ONLY in one of these two shapes:
 2. Enough actionable info → {"done": true, "summary": "one-sentence summary including task type + the specific detail(s) you gathered"}`;
 
 // Used by generateBrief() with gpt-4o for high-quality shopping expertise
-const BRIEF_PROMPT = `You are an expert personal shopping assistant with deep product knowledge. Generate a concise shopping brief for a human representative based on what the customer said.
+const BRIEF_PROMPT = `You are producing a short briefing for a live phone representative based on the FULL intake conversation with the caller — NOT just the first answer. Offline helps customers with online tasks: shopping, bill payments, account help, forms, logins, bookings, and general online assistance.
 
-YOUR KNOWLEDGE BASE:
-- Office furniture: budget desks $50-$150 (Amazon Basics, VIVO, Flash Furniture), mid-range $150-$400 (Sauder, Linon), standing desks $200-$600 (FlexiSpot, Uplift, Autonomous)
-- Laptops: budget $200-$500 (Acer Aspire, Lenovo IdeaPad, HP Stream), mid $500-$900 (Dell Inspiron, Lenovo IdeaPad 5, HP Envy), premium $900+ (MacBook Air M2, Dell XPS, ThinkPad X1)
-- Monitors: budget $100-$200 (AOC, Acer), mid $200-$500 (LG IPS, Dell IPS), gaming $300+ (ASUS ROG, LG UltraGear, MSI)
-- Smartphones: budget $100-$300 (Motorola Moto G, Samsung A-series), mid $300-$600 (Google Pixel 7a, iPhone SE), premium $600+ (iPhone 15, Samsung Galaxy S24)
-- TVs: budget $200-$400 (TCL 5-series, Hisense U6), mid $400-$800 (Samsung Crystal, LG OLED A-series), premium $800+ (Sony Bravia XR, LG OLED C-series)
-- Clothing/shoes: check sizing charts; Nike, Adidas on their own sites; budget fashion on Shein/Amazon; quality brands on Nordstrom/Zappos
+CRITICAL: Read EVERY user message in the conversation below. Combine ALL the details the caller shared across the whole intake (what they need, which company/site, which item, their budget, dates, account info, constraints). The brief MUST reflect the COMPLETE picture — if the caller first said "I need help filling a form" and later said "the I-765 on USCIS.gov for my daughter", your summary must mention I-765, USCIS, and that it is for their daughter.
 
-PLATFORM STRATEGY:
-- Amazon: sort by Avg Customer Review, filter 4+ stars, check "ships from Amazon" for easy returns
-- Wayfair/IKEA: best for furniture under $300; always check assembly reviews
-- Best Buy: use for electronics in-store price match; check open-box deals
-- eBay/Back Market: refurbished electronics at 20-40% discount
-- Walmart.com: great for budget items with free pickup
+You have shopping-specific knowledge to enrich brief when relevant:
+- Office furniture: budget desks $50-$150 (Amazon Basics, VIVO), mid $150-$400 (Sauder), standing $200-$600 (FlexiSpot, Uplift)
+- Laptops: budget $200-$500 (Acer Aspire, Lenovo IdeaPad), mid $500-$900 (Dell Inspiron, HP Envy), premium $900+ (MacBook Air, Dell XPS, ThinkPad X1)
+- Electronics/TVs: TCL, Hisense (budget); Samsung, LG (mid); Sony Bravia, LG OLED (premium)
+- Platforms: Amazon (sort by rating + ships-from-Amazon); Walmart (budget + pickup); Best Buy (price match); Wayfair (furniture); Back Market/eBay (refurbished 20-40% off)
 
-Generate the JSON brief:
-{"category": "electronics|furniture|clothing|services|travel|food|government|financial|other", "brief": "1-2 sentence summary including the specific item, budget if mentioned, and any preferences", "suggestions": {"search_terms": ["3 specific search terms — include price constraints, brand hints, or specs"], "platforms": ["2-3 best platforms for this exact purchase"], "rep_tip": "ONE actionable tip: example search query + recommended brand + where to find best deal"}}
+OUTPUT — valid JSON only:
+{
+  "category": "electronics | furniture | clothing | services | travel | food | government | financial | bills | account_help | forms | shopping | other",
+  "brief": "2-3 sentence summary including the SPECIFIC task + every concrete detail the caller gave (site, company, item, amount, budget, dates, account, constraints). Never say 'a form' if they named the form — say the name.",
+  "suggestions": {
+    "search_terms": ["3 specific search terms derived from the actual details gathered"],
+    "platforms": ["2-3 platforms or sites most relevant for this task"],
+    "rep_tip": "ONE actionable next step for the rep based on the specific details"
+  }
+}
 
-Keep brief under 80 words. Respond with valid JSON only.`;
+Keep brief under 100 words. Respond with valid JSON only.`;
 
 serve(async (req) => {
   if (req.method !== 'POST') {
@@ -172,10 +173,21 @@ serve(async (req) => {
 
   // ── Helper: generate expert shopping brief (gpt-4o — full model with product knowledge) ──
   async function generateBrief(msgs: Message[]): Promise<GptDoneResult> {
+    // Build a plain-text transcript so the model can clearly see each
+    // caller answer separately — much higher-fidelity than raw JSON-wrapped
+    // assistant messages.
+    const transcript = msgs.map(m => {
+      if (m.role === 'user') return `CALLER: ${m.content}`;
+      // assistant content is a JSON-stringified { done, question } — extract the question
+      try {
+        const j = JSON.parse(m.content);
+        return `AI: ${j.question || ''}`;
+      } catch { return `AI: ${m.content}`; }
+    }).join('\n');
+
     const payload = [
       { role: 'system', content: BRIEF_PROMPT },
-      ...msgs,
-      { role: 'user', content: 'Generate the shopping brief now based on what the customer told you.' },
+      { role: 'user', content: `Full intake conversation:\n${transcript}\n\nGenerate the brief now. Combine every detail the caller gave across the whole conversation.` },
     ];
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',

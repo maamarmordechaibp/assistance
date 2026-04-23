@@ -11,6 +11,7 @@ import {
   Loader2,
   CheckCircle,
   Package,
+  Trash2,
 } from 'lucide-react';
 import { edgeFn } from '@/lib/supabase/edge';
 
@@ -28,6 +29,17 @@ interface PaymentPackage {
   price: number;
 }
 
+interface SavedMethod {
+  id: string;
+  card_brand: string | null;
+  card_last4: string | null;
+  card_exp: string | null;
+  cardholder_name: string | null;
+  is_default: boolean;
+  created_at: string;
+  last_used_at: string | null;
+}
+
 export default function RepPaymentsPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [packages, setPackages] = useState<PaymentPackage[]>([]);
@@ -37,12 +49,18 @@ export default function RepPaymentsPage() {
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [paymentSuccess, setPaymentSuccess] = useState(false);
+  const [lockedToCustomer, setLockedToCustomer] = useState(false);
 
   // Card fields
   const [cardNumber, setCardNumber] = useState('');
   const [expDate, setExpDate] = useState('');
   const [cvv, setCvv] = useState('');
   const [cardName, setCardName] = useState('');
+  const [saveCard, setSaveCard] = useState(true);
+
+  // Saved cards
+  const [savedMethods, setSavedMethods] = useState<SavedMethod[]>([]);
+  const [selectedMethodId, setSelectedMethodId] = useState<string | null>(null);
 
   const supabase = createClient();
 
@@ -54,10 +72,49 @@ export default function RepPaymentsPage() {
         .eq('is_active', true)
         .order('sort_order');
       if (pkgs) setPackages(pkgs);
+
+      // If we arrived from the active call screen with ?customerId=…&lock=1
+      // pre-select that customer and hide the search box.
+      if (typeof window !== 'undefined') {
+        const sp = new URLSearchParams(window.location.search);
+        const cid = sp.get('customerId');
+        if (cid) {
+          const { data: cust } = await supabase
+            .from('customers')
+            .select('id, full_name, primary_phone, current_balance_minutes')
+            .eq('id', cid)
+            .single();
+          if (cust) {
+            setSelectedCustomer(cust);
+            setLockedToCustomer(sp.get('lock') === '1');
+          }
+        }
+      }
       setLoading(false);
     }
     init();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Load saved cards whenever the customer changes.
+  useEffect(() => {
+    if (!selectedCustomer) {
+      setSavedMethods([]);
+      setSelectedMethodId(null);
+      return;
+    }
+    (async () => {
+      const res = await edgeFn('payment-methods', { params: { customerId: selectedCustomer.id } });
+      if (res.ok) {
+        const data = await res.json();
+        const list: SavedMethod[] = data.methods ?? [];
+        setSavedMethods(list);
+        // Auto-pick the default card so reps don't have to.
+        const def = list.find(m => m.is_default) || list[0];
+        setSelectedMethodId(def?.id ?? null);
+      }
+    })();
+  }, [selectedCustomer]);
 
   useEffect(() => {
     const timer = setTimeout(async () => {
@@ -86,6 +143,60 @@ export default function RepPaymentsPage() {
       return cleaned.slice(0, 2) + '/' + cleaned.slice(2, 4);
     }
     return cleaned;
+  };
+
+  const refreshCustomerBalance = async () => {
+    if (!selectedCustomer) return;
+    const { data: updated } = await supabase
+      .from('customers')
+      .select('id, full_name, primary_phone, current_balance_minutes')
+      .eq('id', selectedCustomer.id)
+      .single();
+    if (updated) setSelectedCustomer(updated);
+  };
+
+  const chargeSavedCard = async () => {
+    if (!selectedCustomer || !selectedPackage || !selectedMethodId) {
+      toast.error('Select a customer, package, and card');
+      return;
+    }
+    setProcessing(true);
+    try {
+      const res = await edgeFn('payment-methods', {
+        method: 'POST',
+        body: JSON.stringify({
+          customerId: selectedCustomer.id,
+          packageId: selectedPackage,
+          paymentMethodId: selectedMethodId,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        setPaymentSuccess(true);
+        toast.success(`Payment processed! ${data.minutesAdded} minutes added.`);
+        setSelectedPackage('');
+        await refreshCustomerBalance();
+        setTimeout(() => setPaymentSuccess(false), 3000);
+      } else {
+        toast.error(data.error || 'Payment failed');
+      }
+    } catch {
+      toast.error('Payment processing failed');
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const removeSavedCard = async (id: string) => {
+    if (!confirm('Remove this saved card?')) return;
+    const res = await edgeFn('payment-methods', { method: 'DELETE', params: { id } });
+    if (res.ok) {
+      toast.success('Card removed');
+      setSavedMethods(prev => prev.filter(m => m.id !== id));
+      if (selectedMethodId === id) setSelectedMethodId(null);
+    } else {
+      toast.error('Failed to remove card');
+    }
   };
 
   const processPayment = async () => {
@@ -119,33 +230,36 @@ export default function RepPaymentsPage() {
           customerId: selectedCustomer.id,
           packageId: selectedPackage,
           cardNumber: cleanCard,
-          cardExp: expDate.replace('/', ''),
-          cardCvv: cvv,
+          expiration: expDate.replace('/', ''),
+          cvv,
           cardName,
+          saveCard,
         }),
       });
 
-      if (res.ok) {
-        const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
         setPaymentSuccess(true);
-        toast.success(`Payment processed! ${data.minutesAdded} minutes added.`);
+        toast.success(`Payment processed! ${data.minutesAdded} minutes added.${data.savedPaymentMethodId ? ' Card saved.' : ''}`);
         // Clear form
         setCardNumber('');
         setExpDate('');
         setCvv('');
         setCardName('');
         setSelectedPackage('');
-        // Refresh customer balance
-        const { data: updated } = await supabase
-          .from('customers')
-          .select('id, full_name, primary_phone, current_balance_minutes')
-          .eq('id', selectedCustomer.id)
-          .single();
-        if (updated) setSelectedCustomer(updated);
+        await refreshCustomerBalance();
         setTimeout(() => setPaymentSuccess(false), 3000);
+        // Refresh saved cards list (the new one should appear).
+        if (selectedCustomer) {
+          const r2 = await edgeFn('payment-methods', { params: { customerId: selectedCustomer.id } });
+          if (r2.ok) {
+            const d2 = await r2.json();
+            setSavedMethods(d2.methods ?? []);
+            if (data.savedPaymentMethodId) setSelectedMethodId(data.savedPaymentMethodId);
+          }
+        }
       } else {
-        const err = await res.json();
-        toast.error(err.error || 'Payment failed');
+        toast.error(data.error || 'Payment failed');
       }
     } catch {
       toast.error('Payment processing failed');
@@ -192,10 +306,14 @@ export default function RepPaymentsPage() {
                 setSearch('');
               }}
               className="text-sm text-blue-600 hover:underline"
+              disabled={lockedToCustomer}
+              style={lockedToCustomer ? { display: 'none' } : undefined}
             >
               Change
             </button>
           </div>
+        ) : lockedToCustomer ? (
+          <div className="text-sm text-red-600">Customer not found.</div>
         ) : (
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -250,9 +368,68 @@ export default function RepPaymentsPage() {
         </div>
       </div>
 
+      {/* Saved Cards on File */}
+      {selectedCustomer && savedMethods.length > 0 && (
+        <div className="bg-white rounded-xl shadow-sm border p-6">
+          <h3 className="text-sm font-semibold text-gray-500 uppercase mb-3">Cards on File</h3>
+          <div className="space-y-2">
+            {savedMethods.map((m) => (
+              <label
+                key={m.id}
+                className={`flex items-center justify-between p-3 rounded-lg border-2 cursor-pointer transition ${
+                  selectedMethodId === m.id
+                    ? 'border-blue-600 bg-blue-50'
+                    : 'border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <input
+                    type="radio"
+                    name="saved-method"
+                    checked={selectedMethodId === m.id}
+                    onChange={() => setSelectedMethodId(m.id)}
+                  />
+                  <CreditCard className="w-5 h-5 text-gray-500" />
+                  <div>
+                    <div className="font-medium text-sm">
+                      {m.card_brand || 'Card'} ····{m.card_last4}
+                      {m.is_default && <span className="ml-2 text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">Default</span>}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {m.cardholder_name ? `${m.cardholder_name} · ` : ''}
+                      exp {m.card_exp ? `${m.card_exp.slice(0, 2)}/${m.card_exp.slice(2, 4)}` : '—'}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={(e) => { e.preventDefault(); removeSavedCard(m.id); }}
+                  className="text-gray-400 hover:text-red-600"
+                  title="Remove card"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </label>
+            ))}
+          </div>
+          <button
+            onClick={chargeSavedCard}
+            disabled={processing || !selectedPackage || !selectedMethodId}
+            className={`mt-4 w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-white font-semibold text-sm transition ${
+              processing || !selectedPackage || !selectedMethodId
+                ? 'bg-gray-400 cursor-not-allowed'
+                : 'bg-green-600 hover:bg-green-700'
+            }`}
+          >
+            {processing ? <Loader2 className="w-4 h-4 animate-spin" /> : <DollarSign className="w-4 h-4" />}
+            Charge {pkg ? formatCurrency(pkg.price) : '$0.00'} to saved card
+          </button>
+          <p className="text-xs text-gray-500 mt-2">Or enter a new card below.</p>
+        </div>
+      )}
+
       {/* Card Details */}
       <div className="bg-white rounded-xl shadow-sm border p-6">
-        <h3 className="text-sm font-semibold text-gray-500 uppercase mb-3">3. Card Details</h3>
+        <h3 className="text-sm font-semibold text-gray-500 uppercase mb-3">{savedMethods.length > 0 ? 'New Card' : '3. Card Details'}</h3>
         <div className="space-y-3">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Cardholder Name</label>
@@ -296,6 +473,18 @@ export default function RepPaymentsPage() {
               />
             </div>
           </div>
+
+          <label className="flex items-center gap-2 pt-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={saveCard}
+              onChange={(e) => setSaveCard(e.target.checked)}
+              className="w-4 h-4"
+            />
+            <span className="text-sm text-gray-700">
+              Save this card on file for future payments (customer will not need to re-enter card details next time)
+            </span>
+          </label>
         </div>
       </div>
 
