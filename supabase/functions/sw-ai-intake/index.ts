@@ -304,13 +304,12 @@ serve(async (req) => {
     );
   }
 
-  // Check opt-out — customer wants a human now.
-  // Use word-boundary regex so "agent" in "agent-menu" style or partial matches
-  // don't trigger, and never opt-out on turn 1 (one-word ASR misreads).
+  // Check opt-out — customer wants a human now. Honoured on ANY turn, including
+  // turn 1, so callers who just want a rep aren't forced through a follow-up.
   const lower = speechResult.toLowerCase();
-  const optOutRe = /\b(representative|operator|real person|speak to someone|human being|just transfer|skip this)\b/;
-  if (turn >= 2 && optOutRe.test(lower)) {
-    console.log(`[sw-ai-intake] opt-out triggered at turn ${turn}`);
+  const optOutRe = /\b(representative|rep|agent|operator|real person|speak to someone|human being|human|just transfer|skip this|skip|transfer)\b/;
+  if (optOutRe.test(lower)) {
+    console.log(`[sw-ai-intake] opt-out triggered at turn ${turn} (heard: "${speechResult}")`);
     return await transferToRep(null);
   }
 
