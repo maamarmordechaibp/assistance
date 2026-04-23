@@ -386,10 +386,9 @@ serve(async (req) => {
         elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=balance-menu&customerId=${customerId}`));
         return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
       }
-      if (minutes <= 0 && gateMode === 'warn') {
-        elements.push(laml.say('Heads up: your account has no minutes remaining. Your representative may ask you to add a package before the call can continue.'));
-        elements.push(laml.pause(1));
-      }
+      // 'warn' and 'allow' modes: silently route the caller to a rep. The
+      // rep's active-call UI shows a "NO MINUTES" banner so the rep — not
+      // the caller — is the one prompted to collect payment.
     }
 
     // ── Recording disclosure (moved here so first-time IVR greeting is faster)

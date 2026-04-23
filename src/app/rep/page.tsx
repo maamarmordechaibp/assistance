@@ -35,6 +35,7 @@ interface Customer {
   primary_phone: string;
   email: string | null;
   current_balance_minutes: number;
+  total_minutes_purchased?: number;
   internal_notes: string | null;
   status: string;
 }
@@ -658,6 +659,25 @@ export default function RepDashboard() {
                   <div className="bg-gray-50 rounded-lg p-4 border text-gray-500 text-center">
                     <PhoneMissed className="w-8 h-8 mx-auto mb-2" />
                     Unknown caller — no customer profile found
+                  </div>
+                )}
+
+                {/* No-minutes / Low-balance banner — prompts rep to collect payment */}
+                {customer && customer.current_balance_minutes <= 0 && (
+                  <div className="bg-red-50 rounded-lg p-4 border-2 border-red-300">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-red-600 text-white text-xs font-bold">!</span>
+                      <span className="font-semibold text-red-800">
+                        {(customer.total_minutes_purchased ?? 0) > 0
+                          ? 'No minutes remaining'
+                          : 'New caller — no package yet'}
+                      </span>
+                    </div>
+                    <p className="text-sm text-red-700">
+                      {(customer.total_minutes_purchased ?? 0) > 0
+                        ? 'This customer has $0 balance. Offer to top up before starting work.'
+                        : 'This is a first-time caller with no package. Offer a package and collect payment before starting work.'}
+                    </p>
                   </div>
                 )}
 

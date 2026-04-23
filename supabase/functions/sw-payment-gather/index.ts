@@ -30,16 +30,21 @@ serve(async (req) => {
           [laml.say('Please enter your credit card number using your phone keypad, followed by the pound key.')]
         )
       );
+      // Fallback if the Gather times out — re-prompt instead of hanging up.
+      elements.push(laml.say('We did not receive your card number.'));
+      elements.push(laml.redirect(`${baseUrl}/sw-payment-gather?step=card&customerId=${customerId}&packageId=${packageId}`));
       break;
     }
     case 'exp': {
       const cardNum = digits;
       elements.push(
         laml.gather(
-          { input: 'dtmf', numDigits: 4, action: `${baseUrl}/sw-payment-gather?step=cvv&customerId=${customerId}&packageId=${packageId}&cn=${cardNum}`, timeout: 20 },
-          [laml.say('Please enter your card expiration date as four digits. For example, for January 2026, enter 0 1 2 6.')]
+          { input: 'dtmf', numDigits: 4, action: `${baseUrl}/sw-payment-gather?step=cvv&customerId=${customerId}&packageId=${packageId}&cn=${cardNum}`, timeout: 20, finishOnKey: '#' },
+          [laml.say('Thank you. Please enter your card expiration date as four digits. For example, for January 2026, enter 0 1 2 6.')]
         )
       );
+      elements.push(laml.say('We did not receive your expiration date.'));
+      elements.push(laml.redirect(`${baseUrl}/sw-payment-gather?step=card&customerId=${customerId}&packageId=${packageId}`));
       break;
     }
     case 'cvv': {
@@ -51,6 +56,8 @@ serve(async (req) => {
           [laml.say('Please enter your 3 or 4 digit security code on the back of your card, followed by the pound key.')]
         )
       );
+      elements.push(laml.say('We did not receive your security code.'));
+      elements.push(laml.redirect(`${baseUrl}/sw-payment-gather?step=card&customerId=${customerId}&packageId=${packageId}`));
       break;
     }
     case 'process': {
