@@ -124,13 +124,14 @@ export default function RepDashboard() {
   useEffect(() => {
     async function init() {
       try {
+        let myRepId: string | null = null;
         const res = await edgeFn('reps-me');
         // If unauthorized, edgeFn handles signout+redirect — stop here
         if (res.status === 401) return;
         if (res.ok) {
           const data = await res.json();
           setRepStatus(data.rep?.status || 'offline');
-          if (data.rep?.id) setRepId(data.rep.id);
+          if (data.rep?.id) { setRepId(data.rep.id); myRepId = data.rep.id; }
           if (data.webrtcToken) setWebrtcToken(data.webrtcToken);
           if (data.signalwireProjectId) setSignalwireProjectId(data.signalwireProjectId);
           if (data.signalwireSpaceUrl) setSignalwireSpaceUrl(data.signalwireSpaceUrl);
@@ -156,6 +157,28 @@ export default function RepDashboard() {
           .order('sort_order');
 
         if (cats) setCategories(cats);
+
+        // Restore in-progress call on page refresh. A call is considered
+        // "still active" when it has no ended_at AND either this rep claimed
+        // it or it was just connected in the last 10 minutes.
+        try {
+          const { data: ongoing } = await supabase
+            .from('calls')
+            .select('*')
+            .is('ended_at', null)
+            .not('connected_at', 'is', null)
+            .order('connected_at', { ascending: false })
+            .limit(5);
+          const mine = (ongoing || []).find(
+            (c) => c.rep_id && c.rep_id === myRepId,
+          ) || (ongoing || [])[0];
+          if (mine) {
+            setActiveCall(mine as ActiveCall);
+            if (mine.customer_id) loadCustomer(mine.customer_id);
+            if (mine.rep_notes) setRepNotes(mine.rep_notes);
+            if (mine.task_category_id) setSelectedCategory(mine.task_category_id);
+          }
+        } catch { /* non-fatal */ }
       } catch (err) {
         console.error('Init error:', err);
       } finally {
