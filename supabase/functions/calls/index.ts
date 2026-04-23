@@ -79,10 +79,37 @@ serve(async (req) => {
 
     // ── Post-call: synthesise a transcript from rep notes + AI brief +
     //    findings, then fire-and-forget ai-analyze so the call history gets
-    //    a report even without real audio transcription. ──
+    //    a report even without real audio transcription. Also auto-close the
+    //    customer's Browserbase session so we stop being billed. ──
     if (isEndingCall) {
       try {
         const service = createServiceClient();
+
+        // Auto-close the active Browserbase session for this customer
+        try {
+          const customerId = (data as { customer_id?: string })?.customer_id;
+          if (customerId) {
+            const { data: active } = await service.from('customer_browser_sessions')
+              .select('id, bb_session_id')
+              .eq('customer_id', customerId).eq('status', 'active');
+            for (const row of active || []) {
+              try {
+                await fetch(`https://api.browserbase.com/v1/sessions/${row.bb_session_id}`, {
+                  method: 'POST',
+                  headers: {
+                    'X-BB-API-Key': Deno.env.get('BROWSERBASE_API_KEY') || '',
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({ projectId: Deno.env.get('BROWSERBASE_PROJECT_ID'), status: 'REQUEST_RELEASE' }),
+                });
+              } catch { /* still mark ended below */ }
+              await service.from('customer_browser_sessions')
+                .update({ status: 'ended', ended_at: new Date().toISOString() })
+                .eq('id', row.id);
+            }
+          }
+        } catch (e) { console.error('[calls] bb auto-close failed:', e); }
+
         const { data: full } = await service.from('calls')
           .select('id, rep_notes, ai_intake_brief, customer_id, transcript_text')
           .eq('id', id)

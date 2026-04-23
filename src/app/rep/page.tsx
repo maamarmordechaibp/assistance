@@ -26,6 +26,7 @@ import {
   BookMarked,
   ChevronDown,
   ChevronUp,
+  Globe,
 } from 'lucide-react';
 import { edgeFn } from '@/lib/supabase/edge';
 
@@ -113,6 +114,10 @@ export default function RepDashboard() {
   const [showLogFinding, setShowLogFinding] = useState(false);
   const [newFinding, setNewFinding] = useState({ description: '', itemUrl: '', itemPrice: '', itemPlatform: '', itemNotes: '' });
   const [savingFinding, setSavingFinding] = useState(false);
+  // Browserbase customer browser
+  const [bbLiveUrl, setBbLiveUrl] = useState<string | null>(null);
+  const [bbLoading, setBbLoading] = useState(false);
+  const [bbExpanded, setBbExpanded] = useState(false);
   // Track previous brief to fire toast only once when it arrives
   const prevBriefRef = useRef<IntakeBrief | null>(null);
   // makeCallFn is wired from the softphone onReady callback so other pages can use it
@@ -534,6 +539,31 @@ export default function RepDashboard() {
     setShowLogFinding(false);
     setNewFinding({ description: '', itemUrl: '', itemPrice: '', itemPlatform: '', itemNotes: '' });
     prevBriefRef.current = null;
+    setBbLiveUrl(null);
+    setBbExpanded(false);
+  };
+
+  // Open / reuse a customer browser session for the active call.
+  const openCustomerBrowser = async () => {
+    if (!activeCall || !customer) return;
+    setBbLoading(true);
+    try {
+      const res = await edgeFn('browser-session', {
+        method: 'POST',
+        body: JSON.stringify({ customerId: customer.id, callId: activeCall.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to start browser');
+      const url = data.session?.live_url;
+      if (!url) throw new Error('No live URL returned');
+      setBbLiveUrl(url);
+      setBbExpanded(true);
+      toast.success("Customer's browser is ready");
+    } catch (err) {
+      toast.error('Browser failed: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setBbLoading(false);
+    }
   };
 
   if (loading) {
@@ -1011,6 +1041,62 @@ export default function RepDashboard() {
               </div>
             )}
           </div>
+
+          {/* Customer Browser (Browserbase) — only visible while on a call */}
+          {activeCall && customer && (
+            <div className="bg-white rounded-xl shadow-sm border p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-2">
+                  <Globe className="w-4 h-4" />
+                  Customer Browser
+                </h3>
+                <div className="flex items-center gap-2">
+                  {bbLiveUrl && (
+                    <button
+                      onClick={() => setBbExpanded(v => !v)}
+                      className="text-xs px-2 py-1 rounded border hover:bg-gray-50"
+                    >
+                      {bbExpanded ? 'Collapse' : 'Expand'}
+                    </button>
+                  )}
+                  {bbLiveUrl && (
+                    <a
+                      href={bbLiveUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs px-2 py-1 rounded border hover:bg-gray-50 flex items-center gap-1"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      Open in tab
+                    </a>
+                  )}
+                </div>
+              </div>
+              {!bbLiveUrl ? (
+                <button
+                  onClick={openCustomerBrowser}
+                  disabled={bbLoading}
+                  className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border-2 border-dashed border-gray-300 text-sm text-gray-600 hover:border-blue-400 hover:text-blue-600 transition disabled:opacity-50"
+                >
+                  {bbLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Globe className="w-4 h-4" />}
+                  {bbLoading ? 'Starting…' : `Open ${customer.full_name}'s browser`}
+                </button>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-xs text-gray-500">
+                    Live browser session. Cookies, logins and history are saved to this customer
+                    and will be ready next time they call.
+                  </p>
+                  <iframe
+                    src={bbLiveUrl}
+                    className={`w-full rounded-lg border bg-gray-50 ${bbExpanded ? 'h-[700px]' : 'h-[420px]'}`}
+                    sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
+                    allow="clipboard-read; clipboard-write"
+                  />
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Right Panel: Softphone + Password Vault */}
