@@ -133,7 +133,11 @@ serve(async (req) => {
         method: 'POST', headers: bbHeaders(),
         body: JSON.stringify({
           projectId,
-          browserSettings: { context: { id: bbContextId, persist: true } },
+          browserSettings: {
+            context: { id: bbContextId, persist: true },
+            viewport: { width: 1920, height: 1080 },
+            blockAds: true,
+          },
           keepAlive: false,
         }),
       });

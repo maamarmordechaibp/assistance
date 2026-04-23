@@ -186,6 +186,8 @@ serve(async (req) => {
           projectId,
           browserSettings: {
             context: { id: bbContextId, persist: true },
+            viewport: { width: 1920, height: 1080 },
+            blockAds: true,
           },
           keepAlive: false,
         }),
