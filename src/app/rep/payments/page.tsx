@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
 import { formatCurrency, formatPhone } from '@/lib/utils';
@@ -12,6 +13,7 @@ import {
   CheckCircle,
   Package,
   Trash2,
+  ArrowLeft,
 } from 'lucide-react';
 import { edgeFn } from '@/lib/supabase/edge';
 
@@ -280,10 +282,19 @@ export default function RepPaymentsPage() {
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
-      <h2 className="text-xl font-semibold flex items-center gap-2">
-        <CreditCard className="w-6 h-6" />
-        Process Payment
-      </h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-semibold flex items-center gap-2">
+          <CreditCard className="w-6 h-6" />
+          Process Payment
+        </h2>
+        <Link
+          href="/rep"
+          className="flex items-center gap-1 text-sm text-gray-600 hover:text-blue-600"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          Back to Dashboard
+        </Link>
+      </div>
 
       {/* Customer Search */}
       <div className="bg-white rounded-xl shadow-sm border p-6">

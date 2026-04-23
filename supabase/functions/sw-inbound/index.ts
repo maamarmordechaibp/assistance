@@ -425,6 +425,18 @@ serve(async (req) => {
     return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
   }
 
+  // ── Fast-path response (returning caller pressed 1 after greeting) ──
+  //   1 → AI intake (rep). Anything else → full menu.
+  if (step === 'fast-rep' && customerId && digits) {
+    const elements: string[] = [];
+    if (digits === '1') {
+      elements.push(laml.redirect(`${baseUrl}/sw-ai-intake?customerId=${customerId}`));
+    } else {
+      elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
+    }
+    return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+  }
+
   // ── Menu response ──
   if (step === 'menu' && customerId && digits) {
     const elements: string[] = [];
@@ -769,7 +781,7 @@ serve(async (req) => {
       sayLines.push('Press 1 to speak with a representative, or stay on the line for more options.');
       elements.push(
         laml.gather(
-          { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=menu&customerId=${customer.id}`, timeout: 6 },
+          { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=fast-rep&customerId=${customer.id}`, timeout: 6 },
           laml.sayLines(sayLines)
         )
       );

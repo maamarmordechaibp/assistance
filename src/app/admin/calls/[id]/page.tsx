@@ -70,7 +70,7 @@ export default function AdminCallDetail() {
         .from('call_analyses')
         .select('*')
         .eq('call_id', id)
-        .single();
+        .maybeSingle();
 
       if (analysisData) setAnalysis(analysisData as Analysis);
       setLoading(false);

@@ -681,8 +681,6 @@ export default function RepDashboard() {
                     </p>
                     <a
                       href={`/rep/payments?customerId=${customer.id}&lock=1`}
-                      target="_blank"
-                      rel="noopener noreferrer"
                       className="inline-flex items-center gap-2 px-3 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700"
                     >
                       Process Payment →
