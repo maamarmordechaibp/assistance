@@ -13,7 +13,7 @@ import { serve } from 'https://deno.land/std@0.208.0/http/server.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
 import * as laml from '../_shared/laml.ts';
 
-const MAX_TURNS = 3;           // opening + at most 2 follow-ups, then always transfer
+const MAX_TURNS = 5;           // opening + up to 4 follow-ups, then always transfer
 const MAX_SILENCE_RETRIES = 2;
 
 // If the customer says any of these, skip intake and go straight to rep
@@ -28,23 +28,26 @@ const OPT_OUT_KEYWORDS = [
 // general online task assistance — NOT shopping only.
 const TURN_PROMPT = `You are a warm, human-sounding phone intake assistant for Offline — a live support service that helps customers with online tasks like shopping, bill payments, account assistance, and filling out forms.
 
-YOUR JOB: Collect just enough context to pass the caller to a live representative quickly. You are NOT here to fully qualify the request — the representative will.
+YOUR JOB: Gather enough CONCRETE, ACTIONABLE detail so the representative can start working immediately without asking basic questions. A vague task category alone is NOT enough — you must drill down until you have specifics.
 
-STRICT RULES (BREAKING THESE FRUSTRATES CALLERS):
-1. Ask AT MOST ONE follow-up question. Never ask two questions in a row.
-2. As soon as the caller names a task type AND one concrete detail, set done=true immediately. Examples that are ALREADY enough — you MUST mark done=true for these:
-   • "I want to fill out a government form" → done=true (task: form, detail: government)
-   • "I need to pay my electric bill" → done=true
-   • "Buy me a laptop under 500" → done=true
-   • "Help me log into my bank" → done=true
-3. NEVER ask the same question twice. If you already asked "Can you tell me what you need?" and got any answer, mark done=true even if the answer is short.
-4. Use common sense on trailing sentences ("I want to fill out…") — ask what they want to fill out. But once they answer, move on.
-5. Keep follow-up questions under 12 words and sound like a real person.
-6. If the caller asks for a person / representative / agent at any point, set done=true immediately.
+WHAT "ENOUGH DETAIL" LOOKS LIKE (examples of acceptable stopping points):
+  • "Fill out a form" → NOT enough. Ask: "Which form, and on what website or agency?" → "the I-765 on uscis.gov" → enough.
+  • "Pay my electric bill" → NOT enough. Ask: "Which electric company, and do you know the amount?" → "ConEd, about $180" → enough.
+  • "Buy a laptop" → NOT enough. Ask: "What's your budget and what will you use it for?" → "under $600 for college work" → enough.
+  • "Log into my account" → NOT enough. Ask: "Which site or service?" → "Chase online banking" → enough.
+  • "Book a flight" → NOT enough. Ask: "Where to, and around what dates?" → "NYC to Miami next Friday" → enough.
+
+INTERVIEW RULES:
+1. Ask ONE short question per turn (under 15 words). Never stack two questions together.
+2. Each follow-up must extract a NEW piece of missing info — never repeat a question or ask for something they already told you.
+3. You may ask up to 3 follow-up questions if each one adds real value. Stop as soon as the rep has something concrete to act on.
+4. If the caller says "representative", "agent", "person", or sounds frustrated, set done=true immediately regardless of detail level.
+5. Sound like a real person: use contractions, light acknowledgements ("Got it —", "Okay —"). Never robotic.
+6. Do NOT promise anything or quote prices. You gather info; the rep does the work.
 
 OUTPUT FORMAT — respond with valid JSON ONLY in one of these two shapes:
-1. Need one more detail → {"done": false, "question": "your short natural follow-up question"}
-2. Enough info → {"done": true, "summary": "one-sentence summary of what the caller needs"}`;
+1. Need more detail → {"done": false, "question": "your short natural follow-up question"}
+2. Enough actionable info → {"done": true, "summary": "one-sentence summary including task type + the specific detail(s) you gathered"}`;
 
 // Used by generateBrief() with gpt-4o for high-quality shopping expertise
 const BRIEF_PROMPT = `You are an expert personal shopping assistant with deep product knowledge. Generate a concise shopping brief for a human representative based on what the customer said.
@@ -289,20 +292,22 @@ serve(async (req) => {
     );
   }
 
-  // Check opt-out — customer wants a human now
+  // Check opt-out — customer wants a human now.
+  // Use word-boundary regex so "agent" in "agent-menu" style or partial matches
+  // don't trigger, and never opt-out on turn 1 (one-word ASR misreads).
   const lower = speechResult.toLowerCase();
-  if (OPT_OUT_KEYWORDS.some(kw => lower.includes(kw))) {
+  const optOutRe = /\b(representative|operator|real person|speak to someone|human being|just transfer|skip this)\b/;
+  if (turn >= 2 && optOutRe.test(lower)) {
+    console.log(`[sw-ai-intake] opt-out triggered at turn ${turn}`);
     return await transferToRep(null);
   }
 
   // Append customer's spoken answer to context
   messages.push({ role: 'user', content: speechResult });
 
-  // ── Hard cap first: after opening + 2 follow-ups, always transfer. ──
-  // turn 0 = opening question asked, turn 1 = first answer received,
-  // turn 2 = second answer received. By turn 2 we MUST finish regardless of
-  // what GPT wants. This prevents the "asked 3-4 times" loop the caller hit.
-  if (turn >= 2) {
+  // ── Hard cap: after opening + 4 follow-ups, always transfer. ──
+  // Let the caller actually converse — don't cut them off mid-thought.
+  if (turn >= 4) {
     let doneResult: GptDoneResult;
     try {
       doneResult = await generateBrief(messages);
@@ -313,6 +318,31 @@ serve(async (req) => {
     return await finishWithBrief(doneResult);
   }
 
+  // ── Turn-1 is ALWAYS a follow-up. Never transfer on the first user answer.
+  //   A generic task ("fill out a form", "pay a bill") is never enough context
+  //   for the rep, so we force at least one concrete follow-up every time. ──
+  if (turn === 1) {
+    console.log(`[sw-ai-intake] turn 1 — forcing follow-up (heard: "${speechResult}")`);
+    const ans = speechResult.toLowerCase();
+    let q = 'Could you give me one more detail — which website, company, or service is this for?';
+    if (/\bform\b|\bfill\s*out\b|\bapplication\b/.test(ans)) {
+      q = 'Got it — which form, and on what website or agency?';
+    } else if (/\bpay\b|\bbill\b/.test(ans)) {
+      q = 'Got it — which company or bill, and do you know the amount?';
+    } else if (/\bbuy\b|\bshop|purchase|order/.test(ans)) {
+      q = 'Got it — what item, and what\'s your budget?';
+    } else if (/\blog\s*in\b|\baccount\b|\bpassword\b|\bsign\s*in\b/.test(ans)) {
+      q = 'Got it — which website or service?';
+    } else if (/\bbook|reservation|flight|hotel|ticket/.test(ans)) {
+      q = 'Got it — where to, and around what dates?';
+    }
+    messages.push({ role: 'assistant', content: JSON.stringify({ done: false, question: q }) });
+    return new Response(
+      laml.buildLamlResponse(askQuestion(q, turn + 1, encodeCtx(messages), 0, q)),
+      { headers: { 'Content-Type': 'application/xml' } }
+    );
+  }
+
   // ── Ask GPT whether it has enough, OR a follow-up question. ──
   let turnResult: TurnResult;
   try {
@@ -320,6 +350,28 @@ serve(async (req) => {
   } catch (err) {
     console.error('[sw-ai-intake] callGptTurn error:', err);
     turnResult = { done: true, summary: speechResult };
+  }
+
+  // ── Minimum-depth rule: on the FIRST user answer (turn===1), never let
+  //   GPT transfer — the rep needs at least one concrete detail beyond the
+  //   generic task. If GPT tries to finish, synthesise a targeted follow-up
+  //   from the user's own words so we always probe at least once. ──
+  if (turn === 1 && turnResult.done) {
+    console.log('[sw-ai-intake] turn 1 done=true overridden — forcing follow-up');
+    const ans = speechResult.toLowerCase();
+    let q = 'Could you give me one more detail so the rep can get started?';
+    if (/\bform\b|\bfill\s*out\b|\bapplication\b/.test(ans)) {
+      q = 'Got it — which form, and on what website or agency?';
+    } else if (/\bpay\b|\bbill\b/.test(ans)) {
+      q = 'Got it — which company or bill, and do you know the amount?';
+    } else if (/\bbuy\b|\bshop|purchase|order/.test(ans)) {
+      q = 'Got it — what item, and what\'s your budget?';
+    } else if (/\blog\s*in\b|\baccount\b|\bpassword\b|\bsign\s*in\b/.test(ans)) {
+      q = 'Got it — which website or service?';
+    } else if (/\bbook|reservation|flight|hotel|ticket/.test(ans)) {
+      q = 'Got it — where to, and around what dates?';
+    }
+    turnResult = { done: false, question: q };
   }
 
   // ── Loop guard: if GPT's proposed follow-up is essentially the same as one

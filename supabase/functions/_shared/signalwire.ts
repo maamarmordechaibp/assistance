@@ -165,26 +165,27 @@ export async function listQueues() {
   return res.json();
 }
 
-/** Look up the Call Fabric resource-address path (e.g. `/private/office_foo`)
+/** Look up the Call Fabric resource-address path (e.g. `/private/office_foo-xxxxx`)
  *  for a subscriber. SAT subscribers are NOT reachable via plain SIP URIs
  *  (`sip:identity@space` returns 408); they must be addressed through the
  *  Fabric `/private/<name>` path with the SWML `connect` verb.
  *
- *  The subscriber resource's `display_name` IS the Fabric address name
- *  (verified empirically — the space doesn't expose a separate /addresses
- *  endpoint on this plan). */
+ *  IMPORTANT: the Fabric address `name` is NOT the subscriber's display_name —
+ *  SignalWire auto-suffixes it (e.g. `office_foo-ubdtn`). We must hit
+ *  `/api/fabric/resources/subscribers/{id}/addresses` to get the real name. */
 export async function getSubscriberAddressPath(identity: string): Promise<string | null> {
   const { email } = subscriberCreds(identity);
   const spaceUrl = getSpaceUrl();
   const auth = getAuthHeader();
 
   try {
+    // 1) Find the subscriber resource by email.
     const listRes = await fetch(`https://${spaceUrl}/api/fabric/resources/subscribers?page_size=200`, {
       headers: { Authorization: auth },
     });
     if (!listRes.ok) {
       console.error(`[signalwire] list subscribers HTTP ${listRes.status}`);
-      return `/private/${identity}`; // best-effort fallback
+      return `/private/${identity}`;
     }
     const listData = await listRes.json();
     type SubResource = {
@@ -193,15 +194,30 @@ export async function getSubscriberAddressPath(identity: string): Promise<string
       subscriber?: { email?: string };
     };
     const rows: SubResource[] = Array.isArray(listData?.data) ? listData.data : [];
-
-    // 1) Match by subscriber.email (canonical, what createWebRtcToken uses).
     let match = rows.find((r) => r?.subscriber?.email === email);
-    // 2) Fallback: match by display_name == identity (which is what we store
-    //    and what the Fabric address path is rooted at).
     if (!match) match = rows.find((r) => r?.display_name === identity);
+    if (!match?.id) {
+      console.error(`[signalwire] no subscriber found for ${identity}`);
+      return `/private/${identity}`;
+    }
 
-    const name = match?.display_name || identity;
-    return `/private/${name}`;
+    // 2) Fetch that subscriber's address(es) to get the real auto-suffixed name.
+    const addrRes = await fetch(
+      `https://${spaceUrl}/api/fabric/resources/subscribers/${match.id}/addresses`,
+      { headers: { Authorization: auth } },
+    );
+    if (!addrRes.ok) {
+      console.error(`[signalwire] list addresses HTTP ${addrRes.status}`);
+      return `/private/${match.display_name || identity}`;
+    }
+    const addrData = await addrRes.json();
+    type Addr = { name?: string; type?: string };
+    const addrs: Addr[] = Array.isArray(addrData?.data) ? addrData.data : [];
+    const addrName = addrs.find((a) => a?.name)?.name;
+    if (!addrName) {
+      return `/private/${match.display_name || identity}`;
+    }
+    return `/private/${addrName}`;
   } catch (e) {
     console.error('[signalwire] getSubscriberAddressPath failed:', e);
     return `/private/${identity}`;

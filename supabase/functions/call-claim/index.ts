@@ -74,23 +74,20 @@ serve(async (req) => {
 
   const identity = rep?.email ? toSwIdentity(rep.email) : null;
 
-  // Redirect the caller to our connect-claimed-rep LaML endpoint. This pulls
-  // them out of the <Enqueue> waitroom and dials the rep's Call Fabric
-  // subscriber identity, which routes the INVITE to the rep's SDK websocket.
+  // Redirect the caller to our connect-claimed-rep LaML endpoint. It looks
+  // up the rep's phone_e164 / sip_uri and <Dial>s them directly.
   let bridgeInitiated = false;
   try {
-    if (data.call_sid && identity) {
+    if (data.call_sid) {
       const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
       const redirectUrl = `${supabaseUrl}/functions/v1/sw-inbound?step=connect-claimed-rep` +
         `&repId=${encodeURIComponent(user.id)}` +
-        `&queueId=${encodeURIComponent(queueId)}` +
-        `&identity=${encodeURIComponent(identity)}`;
+        `&queueId=${encodeURIComponent(queueId)}`;
       const updateRes = await updateCall(data.call_sid, { url: redirectUrl, method: 'POST' });
       console.log('[call-claim] updateCall result:', JSON.stringify(updateRes).slice(0, 300));
       bridgeInitiated = true;
     } else {
-      console.warn('[call-claim] skipping REST redirect — missing call_sid or identity',
-        { call_sid: data.call_sid, identity });
+      console.warn('[call-claim] skipping REST redirect — missing call_sid');
     }
   } catch (err) {
     console.error('[call-claim] updateCall failed:', err);

@@ -36,7 +36,7 @@ serve(async (req) => {
 
   if (req.method === 'POST') {
     const body = await req.json();
-    const { email, password, fullName, role, phoneExtension } = body;
+    const { email, password, fullName, role, phoneExtension, phoneE164, sipUri } = body;
 
     if (!email || !password || !fullName || !role) {
       return new Response(JSON.stringify({ error: 'Missing required fields' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
@@ -46,6 +46,9 @@ serve(async (req) => {
     }
     if (password.length < 6) {
       return new Response(JSON.stringify({ error: 'Password must be at least 6 characters' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+    if (phoneE164 && !/^\+[1-9][0-9]{6,14}$/.test(phoneE164)) {
+      return new Response(JSON.stringify({ error: 'phoneE164 must be E.164 format (e.g. +14155551234)' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     const { data: authData, error: authError } = await service.auth.admin.createUser({
@@ -66,6 +69,8 @@ serve(async (req) => {
         full_name: fullName,
         email,
         phone_extension: phoneExtension || null,
+        phone_e164: phoneE164 || null,
+        sip_uri: sipUri || null,
         status: 'offline',
       });
 
@@ -80,9 +85,12 @@ serve(async (req) => {
 
   if (req.method === 'PATCH') {
     const body = await req.json();
-    const { id, role, fullName, phoneExtension, resetPassword } = body;
+    const { id, role, fullName, phoneExtension, phoneE164, sipUri, resetPassword } = body;
 
     if (!id) return new Response(JSON.stringify({ error: 'User ID required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (phoneE164 && !/^\+[1-9][0-9]{6,14}$/.test(phoneE164)) {
+      return new Response(JSON.stringify({ error: 'phoneE164 must be E.164 format (e.g. +14155551234)' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
 
     const updatePayload: Record<string, unknown> = {};
     if (role) updatePayload.app_metadata = { role };
@@ -94,10 +102,12 @@ serve(async (req) => {
       if (error) return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    if (fullName || phoneExtension !== undefined) {
-      const repUpdate: Record<string, unknown> = {};
-      if (fullName) repUpdate.full_name = fullName;
-      if (phoneExtension !== undefined) repUpdate.phone_extension = phoneExtension;
+    const repUpdate: Record<string, unknown> = {};
+    if (fullName) repUpdate.full_name = fullName;
+    if (phoneExtension !== undefined) repUpdate.phone_extension = phoneExtension || null;
+    if (phoneE164 !== undefined) repUpdate.phone_e164 = phoneE164 || null;
+    if (sipUri !== undefined) repUpdate.sip_uri = sipUri || null;
+    if (Object.keys(repUpdate).length > 0) {
       await service.from('reps').update(repUpdate).eq('id', id);
     }
 

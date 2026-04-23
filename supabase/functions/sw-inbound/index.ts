@@ -74,10 +74,10 @@ serve(async (req) => {
   //    handler receives it and auto-answers). This is the simplest working
   //    bridge from a LaML Compatibility handler. ──
   if (step === 'connect-claimed-rep') {
-    const identity = url.searchParams.get('identity');
+    const repIdParam = url.searchParams.get('repId');
     const queueId = url.searchParams.get('queueId');
-    if (!identity) {
-      console.error('[sw-inbound] connect-claimed-rep missing identity');
+    if (!repIdParam) {
+      console.error('[sw-inbound] connect-claimed-rep missing repId');
       const elements = [laml.say('We are unable to connect you right now. Please try again.'), laml.hangup()];
       return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
     }
@@ -93,19 +93,34 @@ serve(async (req) => {
         .catch(() => {});
     }
 
-    const sipDomain = Deno.env.get('SIGNALWIRE_SIP_DOMAIN') || 'accuinfo.signalwire.com';
-    const fromNumber = Deno.env.get('SIGNALWIRE_FROM_NUMBER') || '+18459357587';
+    // Look up how to reach the rep: prefer SIP URI (free), fall back to
+    // PSTN number, error if neither is configured.
+    const { data: rep } = await supabase
+      .from('reps')
+      .select('id, full_name, phone_e164, sip_uri')
+      .eq('id', repIdParam)
+      .maybeSingle();
 
+    const dialXml = rep ? laml.dialRep(rep, {
+      callerId: Deno.env.get('SIGNALWIRE_FROM_NUMBER') || undefined,
+      timeout: 30,
+      timeLimit: 14400,
+      record: true,
+    }) : null;
+
+    if (!dialXml) {
+      console.error(`[sw-inbound] connect-claimed-rep rep ${repIdParam} has no phone_e164 or sip_uri`);
+      const elements = [
+        laml.say('Your representative does not have a phone number on file. Please contact support.'),
+        laml.hangup(),
+      ];
+      return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+    }
+
+    console.log(`[sw-inbound] connect-claimed-rep rep=${repIdParam} target=${rep?.sip_uri ? 'sip' : 'pstn'}`);
     const elements = [
       laml.say('Connecting you to your representative now. Please hold.'),
-      laml.dialClient(identity, {
-        sipDomain,
-        timeout: 45,
-        timeLimit: 14400,
-        callerId: from || fromNumber,
-        record: true,
-        action: `${baseUrl}/sw-inbound?step=queue-exit&queueId=${queueId ?? ''}`,
-      }),
+      dialXml,
       laml.hangup(),
     ];
     return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
@@ -137,38 +152,38 @@ serve(async (req) => {
   }
 
   // ── Outbound bridge: invoked when a customer answers a rep-initiated
-  //    outbound call. Connects the rep's Call Fabric subscriber via SWML. ──
+  //    outbound call. Dials the rep on their PSTN number or SIP URI. ──
   if (step === 'outbound-bridge') {
-    const identity = url.searchParams.get('identity');
+    const repIdParam = url.searchParams.get('repId');
     const callId = url.searchParams.get('callId');
-    if (!identity) {
+    if (!repIdParam) {
       const elements = [laml.say('This call was initiated in error. Goodbye.'), laml.hangup()];
       return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
     }
-    const addressPath = await getSubscriberAddressPath(identity);
-    console.log(`[sw-inbound] outbound-bridge identity=${identity} callId=${callId} address=${addressPath}`);
-    if (!addressPath) {
+
+    const { data: rep } = await supabase
+      .from('reps')
+      .select('id, full_name, phone_e164, sip_uri')
+      .eq('id', repIdParam)
+      .maybeSingle();
+
+    const dialXml = rep ? laml.dialRep(rep, {
+      callerId: Deno.env.get('SIGNALWIRE_FROM_NUMBER') || undefined,
+      timeout: 30,
+      timeLimit: 14400,
+      action: `${baseUrl}/sw-inbound?step=outbound-end&callId=${callId ?? ''}`,
+      record: true,
+    }) : null;
+
+    console.log(`[sw-inbound] outbound-bridge rep=${repIdParam} callId=${callId} target=${rep?.sip_uri ? 'sip' : rep?.phone_e164 ? 'pstn' : 'none'}`);
+
+    if (!dialXml) {
       const elements = [laml.say('Your representative is unavailable. Goodbye.'), laml.hangup()];
       return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
     }
-    const swml = {
-      version: '1.0.0',
-      sections: {
-        main: [
-          {
-            connect: {
-              to: addressPath,
-              timeout: 30,
-              max_duration: 14400,
-              answer_on_bridge: true,
-              status_url: `${baseUrl}/sw-inbound?step=outbound-end&callId=${callId ?? ''}`,
-            },
-          },
-          { hangup: {} },
-        ],
-      },
-    };
-    return new Response(JSON.stringify(swml), { headers: { 'Content-Type': 'application/json' } });
+
+    const elements = [dialXml, laml.hangup()];
+    return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
   }
 
   // ── Outbound end: after <Dial> completes on an outbound-bridge call. ──
@@ -434,9 +449,15 @@ serve(async (req) => {
       return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
     }
     switch (digits) {
-      case '1': // next available agent via AI intake
-        elements.push(laml.redirect(`${baseUrl}/sw-ai-intake?customerId=${customerId}`));
+      case '1': { // next available agent — optionally via AI intake
+        const aiEnabled = (Deno.env.get('AI_INTAKE_ENABLED') ?? 'true').toLowerCase() !== 'false';
+        if (aiEnabled) {
+          elements.push(laml.redirect(`${baseUrl}/sw-ai-intake?customerId=${customerId}`));
+        } else {
+          elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=connect-rep&customerId=${customerId}`));
+        }
         break;
+      }
       case '2': // specific extension
         elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=extension&customerId=${customerId}`));
         break;

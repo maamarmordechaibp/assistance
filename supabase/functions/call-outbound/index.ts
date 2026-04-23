@@ -127,7 +127,7 @@ serve(async (req) => {
     }
     const identity = toSwIdentity(rep.email);
     const bridgeUrl = `${supabaseUrl}/functions/v1/sw-inbound?step=outbound-bridge` +
-      `&identity=${encodeURIComponent(identity)}` +
+      `&repId=${encodeURIComponent(rep.id)}` +
       `&callId=${encodeURIComponent(inserted.id)}`;
 
     let swCallSid: string | null = null;

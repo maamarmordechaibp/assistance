@@ -14,6 +14,7 @@ import {
   X,
   Eye,
   EyeOff,
+  Pencil,
 } from 'lucide-react';
 import { edgeFn } from '@/lib/supabase/edge';
 
@@ -26,6 +27,8 @@ interface AppUser {
   rep: {
     full_name: string;
     phone_extension: string | null;
+    phone_e164: string | null;
+    sip_uri: string | null;
     status: string;
   } | null;
 }
@@ -48,7 +51,14 @@ export default function AdminUsersPage() {
     fullName: '',
     role: 'rep' as 'admin' | 'rep',
     phoneExtension: '',
+    phoneE164: '',
+    sipUri: '',
   });
+
+  // Edit rep modal
+  const [editTarget, setEditTarget] = useState<AppUser | null>(null);
+  const [editForm, setEditForm] = useState({ fullName: '', phoneExtension: '', phoneE164: '', sipUri: '' });
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const fetchUsers = async () => {
     try {
@@ -86,7 +96,7 @@ export default function AdminUsersPage() {
       if (res.ok) {
         toast.success(`${form.role === 'admin' ? 'Admin' : 'Rep'} "${form.fullName}" created`);
         setShowCreate(false);
-        setForm({ email: '', password: '', fullName: '', role: 'rep', phoneExtension: '' });
+        setForm({ email: '', password: '', fullName: '', role: 'rep', phoneExtension: '', phoneE164: '', sipUri: '' });
         setShowPassword(false);
         fetchUsers();
       } else {
@@ -132,6 +142,47 @@ export default function AdminUsersPage() {
       }
     } finally {
       setResetting(false);
+    }
+  };
+
+  const openEdit = (user: AppUser) => {
+    setEditTarget(user);
+    setEditForm({
+      fullName: user.rep?.full_name || '',
+      phoneExtension: user.rep?.phone_extension || '',
+      phoneE164: user.rep?.phone_e164 || '',
+      sipUri: user.rep?.sip_uri || '',
+    });
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editTarget) return;
+    if (editForm.phoneE164 && !/^\+[1-9][0-9]{6,14}$/.test(editForm.phoneE164)) {
+      toast.error('Phone must be E.164 format, e.g. +14155551234');
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      const res = await edgeFn('admin-users', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          id: editTarget.id,
+          fullName: editForm.fullName,
+          phoneExtension: editForm.phoneExtension,
+          phoneE164: editForm.phoneE164,
+          sipUri: editForm.sipUri,
+        }),
+      });
+      if (res.ok) {
+        toast.success('Rep updated');
+        setEditTarget(null);
+        fetchUsers();
+      } else {
+        const data = await res.json();
+        toast.error(data.error || 'Failed to save');
+      }
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -245,17 +296,43 @@ export default function AdminUsersPage() {
               </div>
 
               {form.role === 'rep' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Phone Extension <span className="text-gray-400">(optional)</span>
-                  </label>
-                  <input
-                    value={form.phoneExtension}
-                    onChange={(e) => setForm({ ...form, phoneExtension: e.target.value })}
-                    placeholder="101"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                  />
-                </div>
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Phone Extension <span className="text-gray-400">(optional)</span>
+                    </label>
+                    <input
+                      value={form.phoneExtension}
+                      onChange={(e) => setForm({ ...form, phoneExtension: e.target.value })}
+                      placeholder="101"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Dial-out Phone <span className="text-gray-400">(E.164 format)</span>
+                    </label>
+                    <input
+                      value={form.phoneE164}
+                      onChange={(e) => setForm({ ...form, phoneE164: e.target.value })}
+                      placeholder="+14155551234"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Calls will ring this number when assigned.</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      SIP URI <span className="text-gray-400">(optional, overrides phone)</span>
+                    </label>
+                    <input
+                      value={form.sipUri}
+                      onChange={(e) => setForm({ ...form, sipUri: e.target.value })}
+                      placeholder="sip:user@accuinfo.signalwire.com"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">For deskphones or softphones (Zoiper, Linphone). Free audio — no PSTN charge.</p>
+                  </div>
+                </>
               )}
 
               <button
@@ -264,6 +341,71 @@ export default function AdminUsersPage() {
                 className="w-full py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition disabled:opacity-50"
               >
                 {creating ? 'Creating...' : `Create ${form.role === 'admin' ? 'Admin' : 'Rep'}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Rep Modal */}
+      {editTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-md mx-4">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">Edit Rep</h3>
+              <button onClick={() => setEditTarget(null)} className="p-1 rounded hover:bg-gray-100">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-sm text-gray-600 mb-4">{editTarget.email}</p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
+                <input
+                  value={editForm.fullName}
+                  onChange={(e) => setEditForm({ ...editForm, fullName: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Phone Extension</label>
+                <input
+                  value={editForm.phoneExtension}
+                  onChange={(e) => setEditForm({ ...editForm, phoneExtension: e.target.value })}
+                  placeholder="101"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Dial-out Phone <span className="text-gray-400">(E.164)</span>
+                </label>
+                <input
+                  value={editForm.phoneE164}
+                  onChange={(e) => setEditForm({ ...editForm, phoneE164: e.target.value })}
+                  placeholder="+14155551234"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                />
+                <p className="text-xs text-gray-500 mt-1">Cell or landline to ring when a call is assigned.</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  SIP URI <span className="text-gray-400">(optional, preferred)</span>
+                </label>
+                <input
+                  value={editForm.sipUri}
+                  onChange={(e) => setEditForm({ ...editForm, sipUri: e.target.value })}
+                  placeholder="sip:user@accuinfo.signalwire.com"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                />
+                <p className="text-xs text-gray-500 mt-1">For deskphone/softphone. Overrides the phone number if set.</p>
+              </div>
+              <button
+                onClick={handleSaveEdit}
+                disabled={savingEdit}
+                className="w-full py-2.5 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition disabled:opacity-50"
+              >
+                {savingEdit ? 'Saving...' : 'Save'}
               </button>
             </div>
           </div>
@@ -401,6 +543,13 @@ export default function AdminUsersPage() {
                     : 'Never signed in'}
                 </span>
                 <div className="flex gap-1">
+                  <button
+                    onClick={() => openEdit(user)}
+                    className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600"
+                    title="Edit rep"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
                   <button
                     onClick={() => setResetTarget(user)}
                     className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600"

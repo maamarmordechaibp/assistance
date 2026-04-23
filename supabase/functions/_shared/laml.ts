@@ -73,6 +73,44 @@ export function dial(
   return `  <Dial ${attrs.join(' ')}>\n    <Number>${escapeXml(number)}</Number>\n  </Dial>`;
 }
 
+/** Dial a rep using whichever target they have configured.
+ *  Priority: sip_uri (free SIP audio) > phone_e164 (PSTN forwarding).
+ *  Returns null if neither is set. */
+export function dialRep(
+  rep: { sip_uri?: string | null; phone_e164?: string | null },
+  opts: {
+    record?: boolean;
+    timeLimit?: number;
+    action?: string;
+    callerId?: string;
+    timeout?: number;
+    statusCallback?: string;
+  } = {}
+): string | null {
+  const attrs: string[] = [];
+  if (opts.record) attrs.push('record="record-from-answer-dual"');
+  if (opts.timeLimit) attrs.push(`timeLimit="${opts.timeLimit}"`);
+  if (opts.timeout) attrs.push(`timeout="${opts.timeout}"`);
+  if (opts.action) attrs.push(`action="${escapeXml(opts.action)}"`);
+  if (opts.callerId) attrs.push(`callerId="${escapeXml(opts.callerId)}"`);
+  if (opts.statusCallback) {
+    attrs.push(`statusCallback="${escapeXml(opts.statusCallback)}"`);
+    attrs.push('statusCallbackEvent="initiated ringing answered completed"');
+  }
+  const attrStr = attrs.length ? ' ' + attrs.join(' ') : '';
+
+  if (rep.sip_uri && rep.sip_uri.trim()) {
+    const uri = rep.sip_uri.trim();
+    // Accept either "sip:user@host" or a bare user — if bare, wrap.
+    const sipUri = uri.startsWith('sip:') ? uri : `sip:${uri}`;
+    return `  <Dial${attrStr}>\n    <Sip>${escapeXml(sipUri)}</Sip>\n  </Dial>`;
+  }
+  if (rep.phone_e164 && rep.phone_e164.trim()) {
+    return `  <Dial${attrStr}>\n    <Number>${escapeXml(rep.phone_e164.trim())}</Number>\n  </Dial>`;
+  }
+  return null;
+}
+
 export function dialClient(
   identity: string,
   opts: {
