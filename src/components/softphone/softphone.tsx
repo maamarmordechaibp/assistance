@@ -327,10 +327,21 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
     if (!repId) return;
     const supabase = createClient();
 
+    // Stale-ring guard: any row enqueued more than 90s ago is treated as
+    // dead. The customer would have hung up or been routed to voicemail
+    // long before then, so we never ring on stale rows AND we mark them
+    // as expired so other tabs/reps stop seeing them too.
+    const STALE_MS = 90_000;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const tryPickupRow = (row: any, source: string) => {
       if (!row || row.status !== 'waiting') return;
       if (row.target_rep_id && row.target_rep_id !== repId) return;
+      const ageMs = row.enqueued_at ? Date.now() - new Date(row.enqueued_at).getTime() : 0;
+      if (ageMs > STALE_MS) {
+        addLog(`Skipping stale ring (${Math.round(ageMs / 1000)}s old, id=${row.id})`);
+        supabase.from('call_queue').update({ status: 'expired' }).eq('id', row.id).then(() => {});
+        return;
+      }
       if (pendingRingRef.current || callRef.current) return;
       pendingRingRef.current = {
         queueId: row.id,
@@ -347,9 +358,30 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
     let firstPoll = true;
     const poll = async () => {
       try {
+        // First: if we are currently ringing, verify that row is still
+        // waiting AND fresh. If it was claimed/ended/expired (e.g. caller
+        // hung up but no realtime event arrived), clear the UI.
+        const ringing = pendingRingRef.current;
+        if (ringing) {
+          const { data: cur } = await supabase
+            .from('call_queue')
+            .select('id, status, enqueued_at')
+            .eq('id', ringing.queueId)
+            .maybeSingle();
+          const ageMs = cur?.enqueued_at ? Date.now() - new Date(cur.enqueued_at).getTime() : 0;
+          if (!cur || cur.status !== 'waiting' || ageMs > STALE_MS) {
+            pendingRingRef.current = null;
+            setCallerNumber('');
+            setCallState('idle');
+            addLog(`Ring auto-cleared (status=${cur?.status ?? 'gone'} age=${Math.round(ageMs / 1000)}s)`);
+            if (cur && cur.status === 'waiting' && ageMs > STALE_MS) {
+              await supabase.from('call_queue').update({ status: 'expired' }).eq('id', cur.id);
+            }
+          }
+        }
         const { data, error } = await supabase
           .from('call_queue')
-          .select('id, queue_name, from_number, caller_name, target_rep_id, status')
+          .select('id, queue_name, from_number, caller_name, target_rep_id, status, enqueued_at')
           .eq('status', 'waiting')
           .or(`target_rep_id.eq.${repId},target_rep_id.is.null`)
           .order('enqueued_at', { ascending: true })
