@@ -27,6 +27,14 @@ import {
   ChevronDown,
   ChevronUp,
   Globe,
+  FileText,
+  Mail,
+  Download,
+  Search,
+  ShoppingBag,
+  Maximize2,
+  Minimize2,
+  RefreshCw,
 } from 'lucide-react';
 import { edgeFn } from '@/lib/supabase/edge';
 
@@ -118,6 +126,11 @@ export default function RepDashboard() {
   const [bbLiveUrl, setBbLiveUrl] = useState<string | null>(null);
   const [bbLoading, setBbLoading] = useState(false);
   const [bbExpanded, setBbExpanded] = useState(false);
+  const [bbFullscreen, setBbFullscreen] = useState(false);
+  type BbTab = { id: string; url: string; title: string; faviconUrl?: string; debuggerFullscreenUrl: string };
+  const [bbTabs, setBbTabs] = useState<BbTab[]>([]);
+  const [bbActiveTabId, setBbActiveTabId] = useState<string | null>(null);
+  const [bbTabsLoading, setBbTabsLoading] = useState(false);
   // Track previous brief to fire toast only once when it arrives
   const prevBriefRef = useRef<IntakeBrief | null>(null);
   // makeCallFn is wired from the softphone onReady callback so other pages can use it
@@ -559,6 +572,56 @@ export default function RepDashboard() {
     prevBriefRef.current = null;
     setBbLiveUrl(null);
     setBbExpanded(false);
+    setBbFullscreen(false);
+    setBbTabs([]);
+    setBbActiveTabId(null);
+  };
+
+  // Load the current tab list for this customer's BB session.
+  const refreshBbTabs = useCallback(async (customerId: string) => {
+    setBbTabsLoading(true);
+    try {
+      const res = await edgeFn('browser-session', {
+        method: 'GET',
+        params: { customerId, action: 'tabs' },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const pages = (data.pages || []) as BbTab[];
+      setBbTabs(pages);
+      setBbActiveTabId(prev => {
+        if (prev && pages.some(p => p.id === prev)) return prev;
+        return pages[0]?.id || null;
+      });
+    } finally {
+      setBbTabsLoading(false);
+    }
+  }, []);
+
+  // Open a brand-new tab in the customer's browser, then switch to it.
+  const openNewBbTab = async () => {
+    if (!customer) return;
+    try {
+      await edgeFn('browser-session', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'new-tab', customerId: customer.id, url: 'about:blank' }),
+      });
+      // Give Browserbase a moment to register the new target
+      setTimeout(() => { void refreshBbTabs(customer.id); }, 600);
+    } catch (err) {
+      toast.error('New tab failed: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  };
+
+  const closeBbTab = async (tabId: string) => {
+    if (!customer) return;
+    try {
+      await edgeFn('browser-session', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'close-tab', customerId: customer.id, targetId: tabId }),
+      });
+      setTimeout(() => { void refreshBbTabs(customer.id); }, 400);
+    } catch { /* ignore */ }
   };
 
   // Open / reuse a customer browser session for the active call.
@@ -577,12 +640,22 @@ export default function RepDashboard() {
       setBbLiveUrl(url);
       setBbExpanded(true);
       toast.success("Customer's browser is ready");
+      // Load the tab list for this session (there will be at least one default page)
+      void refreshBbTabs(customer.id);
     } catch (err) {
       toast.error('Browser failed: ' + (err instanceof Error ? err.message : String(err)));
     } finally {
       setBbLoading(false);
     }
   };
+
+  // While the browser is open, refresh tab list every 6s so new tabs opened
+  // inside the page (e.g. links with target="_blank") show up in our tab bar.
+  useEffect(() => {
+    if (!bbLiveUrl || !customer) return;
+    const iv = setInterval(() => { void refreshBbTabs(customer.id); }, 6000);
+    return () => clearInterval(iv);
+  }, [bbLiveUrl, customer, refreshBbTabs]);
 
   if (loading) {
     return (
@@ -1062,31 +1135,56 @@ export default function RepDashboard() {
 
           {/* Customer Browser (Browserbase) — only visible while on a call */}
           {activeCall && customer && (
-            <div className="bg-white rounded-xl shadow-sm border p-4">
-              <div className="flex items-center justify-between mb-3">
+            <div className={`bg-white rounded-xl shadow-sm border ${bbFullscreen ? 'fixed inset-2 z-50 flex flex-col p-3' : 'p-4'}`}>
+              <div className="flex items-center justify-between mb-2">
                 <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-2">
                   <Globe className="w-4 h-4" />
-                  Customer Browser
+                  {customer.full_name}&apos;s Browser
                 </h3>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5">
                   {bbLiveUrl && (
-                    <button
-                      onClick={() => setBbExpanded(v => !v)}
-                      className="text-xs px-2 py-1 rounded border hover:bg-gray-50"
-                    >
-                      {bbExpanded ? 'Collapse' : 'Expand'}
-                    </button>
-                  )}
-                  {bbLiveUrl && (
-                    <a
-                      href={bbLiveUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs px-2 py-1 rounded border hover:bg-gray-50 flex items-center gap-1"
-                    >
-                      <ExternalLink className="w-3 h-3" />
-                      Open in tab
-                    </a>
+                    <>
+                      <button
+                        onClick={() => customer && refreshBbTabs(customer.id)}
+                        disabled={bbTabsLoading}
+                        className="text-xs px-2 py-1 rounded border hover:bg-gray-50 flex items-center gap-1"
+                        title="Refresh tab list"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${bbTabsLoading ? 'animate-spin' : ''}`} />
+                      </button>
+                      <button
+                        onClick={openNewBbTab}
+                        className="text-xs px-2 py-1 rounded border hover:bg-gray-50 flex items-center gap-1"
+                        title="Open new tab"
+                      >
+                        <Plus className="w-3 h-3" /> New tab
+                      </button>
+                      <button
+                        onClick={() => setBbFullscreen(v => !v)}
+                        className="text-xs px-2 py-1 rounded border hover:bg-gray-50 flex items-center gap-1"
+                        title={bbFullscreen ? 'Exit full screen' : 'Full screen'}
+                      >
+                        {bbFullscreen ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+                        {bbFullscreen ? 'Exit' : 'Full'}
+                      </button>
+                      {!bbFullscreen && (
+                        <button
+                          onClick={() => setBbExpanded(v => !v)}
+                          className="text-xs px-2 py-1 rounded border hover:bg-gray-50"
+                        >
+                          {bbExpanded ? 'Smaller' : 'Bigger'}
+                        </button>
+                      )}
+                      <a
+                        href={bbLiveUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs px-2 py-1 rounded border hover:bg-gray-50 flex items-center gap-1"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        New window
+                      </a>
+                    </>
                   )}
                 </div>
               </div>
@@ -1100,16 +1198,56 @@ export default function RepDashboard() {
                   {bbLoading ? 'Starting…' : `Open ${customer.full_name}'s browser`}
                 </button>
               ) : (
-                <div className="space-y-2">
-                  <p className="text-xs text-gray-500">
-                    Live browser session. Cookies, logins and history are saved to this customer
-                    and will be ready next time they call.
-                  </p>
+                <div className={`flex flex-col ${bbFullscreen ? 'flex-1 min-h-0' : ''}`}>
+                  {/* Tab bar */}
+                  {bbTabs.length > 0 && (
+                    <div className="flex items-center gap-1 mb-2 overflow-x-auto pb-1 border-b">
+                      {bbTabs.map(tab => (
+                        <div
+                          key={tab.id}
+                          className={`group flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-t-md border-b-2 cursor-pointer whitespace-nowrap max-w-[220px] ${
+                            bbActiveTabId === tab.id
+                              ? 'bg-blue-50 border-blue-500 text-blue-700 font-medium'
+                              : 'bg-gray-50 border-transparent text-gray-600 hover:bg-gray-100'
+                          }`}
+                          onClick={() => setBbActiveTabId(tab.id)}
+                          title={tab.url}
+                        >
+                          {tab.faviconUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={tab.faviconUrl} alt="" className="w-3.5 h-3.5 flex-shrink-0" />
+                          ) : (
+                            <Globe className="w-3.5 h-3.5 flex-shrink-0 text-gray-400" />
+                          )}
+                          <span className="truncate">{tab.title || new URL(tab.url || 'about:blank').hostname || 'New tab'}</span>
+                          {bbTabs.length > 1 && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); void closeBbTab(tab.id); }}
+                              className="opacity-0 group-hover:opacity-100 hover:bg-gray-300 rounded p-0.5 transition"
+                              title="Close tab"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <iframe
-                    src={bbLiveUrl}
-                    className={`w-full rounded-lg border bg-gray-50 ${bbExpanded ? 'h-[700px]' : 'h-[420px]'}`}
-                    sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
-                    allow="clipboard-read; clipboard-write"
+                    src={
+                      bbActiveTabId
+                        ? (bbTabs.find(t => t.id === bbActiveTabId)?.debuggerFullscreenUrl || bbLiveUrl)
+                        : bbLiveUrl
+                    }
+                    className={`w-full rounded-lg border bg-gray-50 ${
+                      bbFullscreen
+                        ? 'flex-1 min-h-0'
+                        : bbExpanded
+                          ? 'h-[80vh]'
+                          : 'h-[600px]'
+                    }`}
+                    sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-popups-to-escape-sandbox"
+                    allow="clipboard-read; clipboard-write; autoplay; microphone; camera"
                   />
                 </div>
               )}

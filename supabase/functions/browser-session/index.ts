@@ -16,6 +16,38 @@ function bbHeaders() {
   };
 }
 
+// Call a browser-level CDP method over the Browserbase connectUrl.
+// Used for Target.createTarget (new tab) / Target.closeTarget.
+async function cdpBrowserCall(connectUrl: string, method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+  const ws = new WebSocket(connectUrl);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('CDP connect timeout')), 12000);
+      ws.onopen = () => { clearTimeout(t); resolve(); };
+      ws.onerror = () => { clearTimeout(t); reject(new Error('CDP ws error')); };
+    });
+    const id = Math.floor(Math.random() * 1_000_000_000);
+    const resultPromise = new Promise<unknown>((resolve, reject) => {
+      const to = setTimeout(() => reject(new Error(`${method} timeout`)), 12000);
+      const listener = (e: MessageEvent) => {
+        let msg: { id?: number; result?: unknown; error?: { message?: string } };
+        try { msg = JSON.parse(e.data); } catch { return; }
+        if (msg.id === id) {
+          clearTimeout(to);
+          ws.removeEventListener('message', listener);
+          if (msg.error) reject(new Error(msg.error.message || method));
+          else resolve(msg.result);
+        }
+      };
+      ws.addEventListener('message', listener);
+    });
+    ws.send(JSON.stringify({ id, method, params }));
+    return await resultPromise;
+  } finally {
+    try { ws.close(); } catch { /* ignore */ }
+  }
+}
+
 async function getOrCreateContext(svc: ReturnType<typeof createServiceClient>, customerId: string) {
   const projectId = Deno.env.get('BROWSERBASE_PROJECT_ID')!;
   const { data: existing } = await svc
@@ -65,14 +97,34 @@ serve(async (req) => {
   const projectId = Deno.env.get('BROWSERBASE_PROJECT_ID')!;
 
   try {
-    // ── GET: status + recent history ──────────────────────────
+    // ── GET: status + recent history (optionally include tabs) ─
     if (req.method === 'GET') {
       const customerId = url.searchParams.get('customerId') || '';
+      const action = url.searchParams.get('action') || '';
       if (!customerId) return new Response(JSON.stringify({ error: 'customerId required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       const { data: active } = await svc.from('customer_browser_sessions')
-        .select('id, bb_session_id, live_url, started_at')
+        .select('id, bb_session_id, live_url, started_at, connect_url')
         .eq('customer_id', customerId).eq('status', 'active')
         .order('started_at', { ascending: false }).limit(1).maybeSingle();
+
+      // Tabs: call Browserbase debug endpoint for the current session and return
+      // the pages[] array so the UI can render one iframe per tab.
+      if (action === 'tabs' && active?.bb_session_id) {
+        const liveRes = await fetch(`${BB_API}/sessions/${active.bb_session_id}/debug`, { headers: bbHeaders() });
+        if (!liveRes.ok) return new Response(JSON.stringify({ error: 'debug fetch failed', detail: await liveRes.text() }), { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        const liveJson = await liveRes.json();
+        // pages: [{ id, url, title, faviconUrl, debuggerUrl, debuggerFullscreenUrl }]
+        const pages = (liveJson.pages || []).map((p: Record<string, unknown>) => ({
+          id: p.id, url: p.url, title: p.title, faviconUrl: p.faviconUrl,
+          debuggerFullscreenUrl: p.debuggerFullscreenUrl || p.debuggerUrl,
+        }));
+        return new Response(JSON.stringify({
+          sessionId: active.bb_session_id,
+          pages,
+          fullscreenUrl: liveJson.debuggerFullscreenUrl || '',
+        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+
       const { data: history } = await svc.from('customer_browser_history')
         .select('id, url, title, visited_at')
         .eq('customer_id', customerId).order('visited_at', { ascending: false }).limit(20);
@@ -81,12 +133,37 @@ serve(async (req) => {
       });
     }
 
-    // ── POST: start (or reuse) a session ──────────────────────
+    // ── POST: start (or reuse) a session, or manage tabs ─────
     if (req.method === 'POST') {
       const body = await req.json();
+      const action: string = body.action || '';
       const customerId: string = body.customerId;
-      const callId: string | undefined = body.callId;
       if (!customerId) return new Response(JSON.stringify({ error: 'customerId required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+
+      // ── Tab management actions — operate on existing active session via CDP ──
+      if (action === 'new-tab' || action === 'close-tab') {
+        const { data: active } = await svc.from('customer_browser_sessions')
+          .select('connect_url').eq('customer_id', customerId).eq('status', 'active')
+          .order('started_at', { ascending: false }).limit(1).maybeSingle();
+        if (!active?.connect_url) return new Response(JSON.stringify({ error: 'no active session' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+
+        try {
+          if (action === 'new-tab') {
+            const tabUrl: string = body.url || 'about:blank';
+            const result = await cdpBrowserCall(active.connect_url, 'Target.createTarget', { url: tabUrl });
+            return new Response(JSON.stringify({ ok: true, targetId: (result as { targetId?: string }).targetId }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          } else {
+            const targetId: string = body.targetId;
+            if (!targetId) return new Response(JSON.stringify({ error: 'targetId required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+            await cdpBrowserCall(active.connect_url, 'Target.closeTarget', { targetId });
+            return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          }
+        } catch (err) {
+          return new Response(JSON.stringify({ error: 'cdp call failed', detail: String((err as Error).message) }), { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+      }
+
+      const callId: string | undefined = body.callId;
 
       // If an active session already exists, return it
       const { data: existing } = await svc.from('customer_browser_sessions')
