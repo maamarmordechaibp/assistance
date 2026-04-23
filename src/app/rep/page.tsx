@@ -163,27 +163,31 @@ export default function RepDashboard() {
 
         if (cats) setCategories(cats);
 
-        // Restore in-progress call on page refresh. A call is considered
-        // "still active" when it has no ended_at AND either this rep claimed
-        // it or it was just connected in the last 10 minutes.
-        try {
-          const { data: ongoing } = await supabase
-            .from('calls')
-            .select('*')
-            .is('ended_at', null)
-            .not('connected_at', 'is', null)
-            .order('connected_at', { ascending: false })
-            .limit(5);
-          const mine = (ongoing || []).find(
-            (c) => c.rep_id && c.rep_id === myRepId,
-          ) || (ongoing || [])[0];
-          if (mine) {
-            setActiveCall(mine as ActiveCall);
-            if (mine.customer_id) loadCustomer(mine.customer_id);
-            if (mine.rep_notes) setRepNotes(mine.rep_notes);
-            if (mine.task_category_id) setSelectedCategory(mine.task_category_id);
-          }
-        } catch { /* non-fatal */ }
+        // Restore in-progress call on page refresh. A call is only restored
+        // when (a) THIS rep is assigned, (b) ended_at is null, and
+        // (c) it was connected within the last 30 minutes — otherwise it
+        // is treated as a stale ghost call and ignored.
+        if (myRepId) {
+          try {
+            const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+            const { data: ongoing } = await supabase
+              .from('calls')
+              .select('*')
+              .eq('rep_id', myRepId)
+              .is('ended_at', null)
+              .not('connected_at', 'is', null)
+              .gte('connected_at', cutoff)
+              .order('connected_at', { ascending: false })
+              .limit(1);
+            const mine = (ongoing || [])[0];
+            if (mine) {
+              setActiveCall(mine as ActiveCall);
+              if (mine.customer_id) loadCustomer(mine.customer_id);
+              if (mine.rep_notes) setRepNotes(mine.rep_notes);
+              if (mine.task_category_id) setSelectedCategory(mine.task_category_id);
+            }
+          } catch { /* non-fatal */ }
+        }
       } catch (err) {
         console.error('Init error:', err);
       } finally {
@@ -302,12 +306,26 @@ export default function RepDashboard() {
   }, [activeCall?.ai_intake_brief]);
 
   const handleCallEnded = useCallback(() => {
-    setActiveCall(null);
+    // SignalWire signaled the WebRTC leg ended (rep or customer hung up).
+    // Stamp the call as ended in the DB so billing stops and the call
+    // doesn't get auto-restored on refresh. Fire-and-forget — UI clears
+    // immediately regardless of network result.
+    setActiveCall((prev) => {
+      if (prev?.id) {
+        edgeFn('calls', {
+          method: 'PATCH',
+          body: JSON.stringify({ id: prev.id, endCall: true }),
+        }).catch(() => { /* non-fatal — sw-status webhook will catch it */ });
+      }
+      return null;
+    });
     setCustomer(null);
     setCredentials([]);
     setShowLogFinding(false);
     setNewFinding({ description: '', itemUrl: '', itemPrice: '', itemPlatform: '', itemNotes: '' });
     prevBriefRef.current = null;
+    setBbLiveUrl(null);
+    setBbExpanded(false);
   }, []);
 
   const loadCustomer = useCallback(async (customerId: string | null) => {
