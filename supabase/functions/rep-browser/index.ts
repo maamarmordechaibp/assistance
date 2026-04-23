@@ -74,6 +74,14 @@ serve(async (req) => {
   const url = new URL(req.url);
   const projectId = Deno.env.get('BROWSERBASE_PROJECT_ID')!;
 
+  // Fast-fail with a clear error if the migration wasn't run yet.
+  {
+    const { error: tblErr } = await svc.from('rep_browser_sessions').select('id').limit(1);
+    if (tblErr && /relation .* does not exist|not find the table/i.test(tblErr.message || '')) {
+      return json({ error: 'migration_missing', detail: 'Run supabase/migrations/20260423_rep_browser.sql in the SQL editor.' }, 503);
+    }
+  }
+
   try {
     if (req.method === 'GET') {
       const action = url.searchParams.get('action') || '';
