@@ -1250,15 +1250,18 @@ export default function RepDashboard() {
                           {bbExpanded ? 'Smaller' : 'Bigger'}
                         </button>
                       )}
-                      <a
-                        href={bbLiveUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs px-2 py-1 rounded border hover:bg-gray-50 flex items-center gap-1"
+                      <button
+                        onClick={() => {
+                          const active = bbActiveTabId ? bbTabs.find(t => t.id === bbActiveTabId)?.debuggerFullscreenUrl : null;
+                          const target = active || bbLiveUrl;
+                          if (target) window.open(target, '_blank', 'noopener,noreferrer,width=1600,height=1000');
+                        }}
+                        className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 flex items-center gap-1"
+                        title="Open in a real browser window (much bigger)"
                       >
                         <ExternalLink className="w-3 h-3" />
-                        New window
-                      </a>
+                        Pop out
+                      </button>
                     </>
                   )}
                 </div>
@@ -1391,6 +1394,17 @@ export default function RepDashboard() {
                     </button>
                     <button onClick={newRbTab} className="text-xs px-2 py-1 rounded border hover:bg-gray-50 flex items-center gap-1" title="New tab">
                       <Plus className="w-3 h-3" /> New
+                    </button>
+                    <button
+                      onClick={() => {
+                        const active = rbActiveTabId ? rbTabs.find(t => t.id === rbActiveTabId)?.debuggerFullscreenUrl : null;
+                        const target = active || rbLiveUrl;
+                        if (target) window.open(target, '_blank', 'noopener,noreferrer,width=1600,height=1000');
+                      }}
+                      className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 flex items-center gap-1"
+                      title="Open in a real browser window (much bigger)"
+                    >
+                      <ExternalLink className="w-3 h-3" /> Pop out
                     </button>
                     <button onClick={() => setRbFullscreen(v => !v)} className="text-xs px-2 py-1 rounded border hover:bg-gray-50 flex items-center gap-1">
                       {rbFullscreen ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
