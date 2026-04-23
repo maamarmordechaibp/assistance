@@ -131,6 +131,14 @@ export default function RepDashboard() {
   const [bbTabs, setBbTabs] = useState<BbTab[]>([]);
   const [bbActiveTabId, setBbActiveTabId] = useState<string | null>(null);
   const [bbTabsLoading, setBbTabsLoading] = useState(false);
+
+  // Rep's own personal browser (no customer required)
+  const [rbLiveUrl, setRbLiveUrl] = useState<string | null>(null);
+  const [rbLoading, setRbLoading] = useState(false);
+  const [rbOpen, setRbOpen] = useState(false);
+  const [rbFullscreen, setRbFullscreen] = useState(false);
+  const [rbTabs, setRbTabs] = useState<BbTab[]>([]);
+  const [rbActiveTabId, setRbActiveTabId] = useState<string | null>(null);
   // Track previous brief to fire toast only once when it arrives
   const prevBriefRef = useRef<IntakeBrief | null>(null);
   // makeCallFn is wired from the softphone onReady callback so other pages can use it
@@ -623,6 +631,72 @@ export default function RepDashboard() {
       setTimeout(() => { void refreshBbTabs(customer.id); }, 400);
     } catch { /* ignore */ }
   };
+
+  // ── Rep's personal browser ────────────────────────────────
+  const refreshRbTabs = useCallback(async () => {
+    try {
+      const res = await edgeFn('rep-browser', { method: 'GET', params: { action: 'tabs' } });
+      if (!res.ok) return;
+      const data = await res.json();
+      const pages = (data.pages || []) as BbTab[];
+      setRbTabs(pages);
+      setRbActiveTabId(prev => {
+        if (prev && pages.some(p => p.id === prev)) return prev;
+        return pages[0]?.id || null;
+      });
+    } catch { /* ignore */ }
+  }, []);
+
+  const openRepBrowser = async () => {
+    setRbLoading(true);
+    try {
+      const res = await edgeFn('rep-browser', { method: 'POST', body: JSON.stringify({}) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to start rep browser');
+      const url = data.session?.live_url;
+      if (!url) throw new Error('No live URL returned');
+      setRbLiveUrl(url);
+      setRbOpen(true);
+      toast.success('Your browser is ready');
+      void refreshRbTabs();
+    } catch (err) {
+      toast.error('Browser failed: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setRbLoading(false);
+    }
+  };
+
+  const newRbTab = async () => {
+    try {
+      await edgeFn('rep-browser', { method: 'POST', body: JSON.stringify({ action: 'new-tab', url: 'about:blank' }) });
+      setTimeout(() => { void refreshRbTabs(); }, 600);
+    } catch { /* ignore */ }
+  };
+
+  const closeRbTab = async (tabId: string) => {
+    try {
+      await edgeFn('rep-browser', { method: 'POST', body: JSON.stringify({ action: 'close-tab', targetId: tabId }) });
+      setTimeout(() => { void refreshRbTabs(); }, 400);
+    } catch { /* ignore */ }
+  };
+
+  const endRepBrowser = async () => {
+    try {
+      await edgeFn('rep-browser', { method: 'DELETE' });
+    } catch { /* ignore */ }
+    setRbLiveUrl(null);
+    setRbTabs([]);
+    setRbActiveTabId(null);
+    setRbOpen(false);
+    setRbFullscreen(false);
+  };
+
+  // Poll tab list for the rep browser while open
+  useEffect(() => {
+    if (!rbLiveUrl) return;
+    const iv = setInterval(() => { void refreshRbTabs(); }, 6000);
+    return () => clearInterval(iv);
+  }, [rbLiveUrl, refreshRbTabs]);
 
   // Open / reuse a customer browser session for the active call.
   const openCustomerBrowser = async () => {
@@ -1299,6 +1373,94 @@ export default function RepDashboard() {
                 if (cbRef) cbRef.current = makeCall;
               }}
             />
+          </div>
+
+          {/* Rep's personal browser — always available, outside customer calls */}
+          <div className={`bg-white rounded-xl shadow-sm border ${rbFullscreen ? 'fixed inset-2 z-50 flex flex-col p-3' : 'p-4'}`}>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-2">
+                <Globe className="w-4 h-4" />
+                My Browser
+              </h3>
+              <div className="flex items-center gap-1.5">
+                {rbLiveUrl && (
+                  <>
+                    <button onClick={() => refreshRbTabs()} className="text-xs px-2 py-1 rounded border hover:bg-gray-50" title="Refresh tabs">
+                      <RefreshCw className="w-3 h-3" />
+                    </button>
+                    <button onClick={newRbTab} className="text-xs px-2 py-1 rounded border hover:bg-gray-50 flex items-center gap-1" title="New tab">
+                      <Plus className="w-3 h-3" /> New
+                    </button>
+                    <button onClick={() => setRbFullscreen(v => !v)} className="text-xs px-2 py-1 rounded border hover:bg-gray-50 flex items-center gap-1">
+                      {rbFullscreen ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+                      {rbFullscreen ? 'Exit' : 'Full'}
+                    </button>
+                    {!rbFullscreen && (
+                      <button onClick={() => setRbOpen(v => !v)} className="text-xs px-2 py-1 rounded border hover:bg-gray-50">
+                        {rbOpen ? 'Hide' : 'Show'}
+                      </button>
+                    )}
+                    <button onClick={endRepBrowser} className="text-xs px-2 py-1 rounded border hover:bg-red-50 text-red-600 flex items-center gap-1" title="End session">
+                      <X className="w-3 h-3" /> End
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+            {!rbLiveUrl ? (
+              <button
+                onClick={openRepBrowser}
+                disabled={rbLoading}
+                className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border-2 border-dashed border-gray-300 text-sm text-gray-600 hover:border-blue-400 hover:text-blue-600 transition disabled:opacity-50"
+              >
+                {rbLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Globe className="w-4 h-4" />}
+                {rbLoading ? 'Starting…' : 'Open my browser'}
+              </button>
+            ) : rbOpen || rbFullscreen ? (
+              <div className={`flex flex-col ${rbFullscreen ? 'flex-1 min-h-0' : ''}`}>
+                {rbTabs.length > 0 && (
+                  <div className="flex items-center gap-1 mb-2 overflow-x-auto pb-1 border-b">
+                    {rbTabs.map(tab => (
+                      <div
+                        key={tab.id}
+                        className={`group flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-t-md border-b-2 cursor-pointer whitespace-nowrap max-w-[220px] ${
+                          rbActiveTabId === tab.id
+                            ? 'bg-blue-50 border-blue-500 text-blue-700 font-medium'
+                            : 'bg-gray-50 border-transparent text-gray-600 hover:bg-gray-100'
+                        }`}
+                        onClick={() => setRbActiveTabId(tab.id)}
+                        title={tab.url}
+                      >
+                        {tab.faviconUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={tab.faviconUrl} alt="" className="w-3.5 h-3.5 flex-shrink-0" />
+                        ) : (
+                          <Globe className="w-3.5 h-3.5 flex-shrink-0 text-gray-400" />
+                        )}
+                        <span className="truncate">{tab.title || (tab.url ? new URL(tab.url).hostname : 'New tab')}</span>
+                        {rbTabs.length > 1 && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); void closeRbTab(tab.id); }}
+                            className="opacity-0 group-hover:opacity-100 hover:bg-gray-300 rounded p-0.5 transition"
+                            title="Close tab"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <iframe
+                  src={rbActiveTabId ? (rbTabs.find(t => t.id === rbActiveTabId)?.debuggerFullscreenUrl || rbLiveUrl) : rbLiveUrl}
+                  className={`w-full rounded-lg border bg-gray-50 ${rbFullscreen ? 'flex-1 min-h-0' : 'h-[600px]'}`}
+                  sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-popups-to-escape-sandbox"
+                  allow="clipboard-read; clipboard-write; autoplay; microphone; camera"
+                />
+              </div>
+            ) : (
+              <p className="text-xs text-gray-500 py-2">Browser session active — click <strong>Show</strong> to reveal.</p>
+            )}
           </div>
 
           <div className="bg-white rounded-xl shadow-sm border p-6">
