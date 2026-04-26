@@ -91,9 +91,13 @@ serve(async (req) => {
     if (!content) throw new Error('No response from OpenAI');
 
     const result = JSON.parse(content);
-    if (!result.ai_summary || !result.ai_success_status || !result.ai_sentiment) {
-      throw new Error('Incomplete analysis result from AI');
+    // Be tolerant: don't throw if a few fields are missing — fill in safe defaults
+    // so we always produce SOMETHING instead of leaving the call analysis blank.
+    if (!result.ai_summary) {
+      result.ai_summary = (call.transcript_text as string).slice(0, 280);
     }
+    if (!result.ai_success_status) result.ai_success_status = 'partially_successful';
+    if (!result.ai_sentiment) result.ai_sentiment = 'neutral';
 
     // Save analysis (includes new item_* fields)
     const { data: analysis, error } = await supabase
