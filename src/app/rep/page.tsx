@@ -1305,14 +1305,6 @@ export default function RepDashboard() {
                     <ExternalLink className="w-4 h-4" />
                     Open Chrome — {customer.full_name}&apos;s profile
                   </button>
-                  <button
-                    onClick={openCustomerBrowser}
-                    disabled={bbLoading}
-                    className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border-2 border-dashed border-gray-300 text-xs text-gray-500 hover:border-blue-400 hover:text-blue-600 transition disabled:opacity-50"
-                  >
-                    {bbLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Globe className="w-3 h-3" />}
-                    {bbLoading ? 'Starting…' : 'Or use embedded browser (slower)'}
-                  </button>
                 </div>
               ) : (
                 <div className={`flex flex-col ${bbFullscreen ? 'flex-1 min-h-0' : ''}`}>
@@ -1469,14 +1461,6 @@ export default function RepDashboard() {
                 >
                   <ExternalLink className="w-4 h-4" />
                   Open Chrome — my profile
-                </button>
-                <button
-                  onClick={openRepBrowser}
-                  disabled={rbLoading}
-                  className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border-2 border-dashed border-gray-300 text-xs text-gray-500 hover:border-blue-400 hover:text-blue-600 transition disabled:opacity-50"
-                >
-                  {rbLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Globe className="w-3 h-3" />}
-                  {rbLoading ? 'Starting…' : 'Or use embedded browser (slower)'}
                 </button>
               </div>
             ) : rbOpen || rbFullscreen ? (

@@ -9,7 +9,7 @@ export function buildLamlResponse(elements: string[]): string {
 // via the same `Polly.<Name>-Neural` convention Twilio uses. Joanna-Neural
 // is consistently rated as one of the most natural and friendly female
 // voices, and tends to sound "a bit excited" without being robotic.
-export function say(text: string, voice = 'Polly.Joanna-Neural'): string {
+export function say(text: string, voice = 'Polly.Matthew-Neural'): string {
   return `  <Say voice="${voice}">${escapeXml(text)}</Say>`;
 }
 
@@ -17,7 +17,7 @@ export function say(text: string, voice = 'Polly.Joanna-Neural'): string {
  *  prosody engine handles pacing naturally (no robotic pauses between
  *  sentences). Returns a single-element array so callers can spread into
  *  their elements list. */
-export function sayLines(lines: string[], voice = 'Polly.Joanna-Neural'): string[] {
+export function sayLines(lines: string[], voice = 'Polly.Matthew-Neural'): string[] {
   const joined = lines
     .map(l => l.trim())
     .filter(Boolean)

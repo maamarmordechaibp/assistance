@@ -426,11 +426,11 @@ serve(async (req) => {
     return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
   }
 
-  // ── Fast-path response (returning caller pressed 1 after greeting) ──
-  //   1 → AI intake (rep). Anything else → full menu.
+  // ── Fast-path response (returning caller pressed 0 after greeting) ──
+  //   0 → AI intake (rep). Anything else → full menu.
   if (step === 'fast-rep' && customerId && digits) {
     const elements: string[] = [];
-    if (digits === '1') {
+    if (digits === '0') {
       elements.push(laml.redirect(`${baseUrl}/sw-ai-intake?customerId=${customerId}`));
     } else {
       elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
@@ -948,7 +948,7 @@ serve(async (req) => {
       // Returning-caller fast-path: greet + "press 1 for rep" all
       // inside one <Gather> so any digit barge-in jumps straight to menu.
       const sayLines = [...greetingLines];
-      sayLines.push('Press 1 to speak with a representative right now, or stay on the line for more options.');
+      sayLines.push('Press 0 to speak with a representative right now, or stay on the line for more options.');
       elements.push(
         laml.gather(
           { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=fast-rep&customerId=${customer.id}`, timeout: 6 },
