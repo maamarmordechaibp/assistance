@@ -647,6 +647,26 @@ export default function RepDashboard() {
     } catch { /* ignore */ }
   }, []);
 
+  // Local launcher (rep's PC): opens real Chrome windows in per-customer profiles.
+  // Requires the rep to install tools/offline-browser-launcher (one-time).
+  const LAUNCHER_URL = 'http://localhost:17345';
+  const openLocalChrome = async (profile: string, url: string, label: string) => {
+    try {
+      const res = await fetch(`${LAUNCHER_URL}/open`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile, url }),
+      });
+      if (!res.ok) throw new Error(`launcher returned ${res.status}`);
+      toast.success(`Opened Chrome — ${label}`);
+    } catch (err) {
+      toast.error('Local browser launcher not running. Install it from tools/offline-browser-launcher.', {
+        description: String((err as Error).message || err),
+        duration: 8000,
+      });
+    }
+  };
+
   const openRepBrowser = async () => {
     setRbLoading(true);
     try {
@@ -1267,14 +1287,23 @@ export default function RepDashboard() {
                 </div>
               </div>
               {!bbLiveUrl ? (
-                <button
-                  onClick={openCustomerBrowser}
-                  disabled={bbLoading}
-                  className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border-2 border-dashed border-gray-300 text-sm text-gray-600 hover:border-blue-400 hover:text-blue-600 transition disabled:opacity-50"
-                >
-                  {bbLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Globe className="w-4 h-4" />}
-                  {bbLoading ? 'Starting…' : `Open ${customer.full_name}'s browser`}
-                </button>
+                <div className="space-y-2">
+                  <button
+                    onClick={() => openLocalChrome(`customer-${customer.id}`, 'https://www.google.com', `${customer.full_name}'s profile`)}
+                    className="w-full flex items-center justify-center gap-2 py-3 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition"
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                    Open Chrome — {customer.full_name}&apos;s profile
+                  </button>
+                  <button
+                    onClick={openCustomerBrowser}
+                    disabled={bbLoading}
+                    className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border-2 border-dashed border-gray-300 text-xs text-gray-500 hover:border-blue-400 hover:text-blue-600 transition disabled:opacity-50"
+                  >
+                    {bbLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Globe className="w-3 h-3" />}
+                    {bbLoading ? 'Starting…' : 'Or use embedded browser (slower)'}
+                  </button>
+                </div>
               ) : (
                 <div className={`flex flex-col ${bbFullscreen ? 'flex-1 min-h-0' : ''}`}>
                   {/* Tab bar */}
@@ -1423,14 +1452,23 @@ export default function RepDashboard() {
               </div>
             </div>
             {!rbLiveUrl ? (
-              <button
-                onClick={openRepBrowser}
-                disabled={rbLoading}
-                className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border-2 border-dashed border-gray-300 text-sm text-gray-600 hover:border-blue-400 hover:text-blue-600 transition disabled:opacity-50"
-              >
-                {rbLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Globe className="w-4 h-4" />}
-                {rbLoading ? 'Starting…' : 'Open my browser'}
-              </button>
+              <div className="space-y-2">
+                <button
+                  onClick={() => openLocalChrome(`rep-${repId || 'me'}`, 'https://www.google.com', 'your profile')}
+                  className="w-full flex items-center justify-center gap-2 py-3 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                  Open Chrome — my profile
+                </button>
+                <button
+                  onClick={openRepBrowser}
+                  disabled={rbLoading}
+                  className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border-2 border-dashed border-gray-300 text-xs text-gray-500 hover:border-blue-400 hover:text-blue-600 transition disabled:opacity-50"
+                >
+                  {rbLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Globe className="w-3 h-3" />}
+                  {rbLoading ? 'Starting…' : 'Or use embedded browser (slower)'}
+                </button>
+              </div>
             ) : rbOpen || rbFullscreen ? (
               <div className={`flex flex-col ${rbFullscreen ? 'flex-1 min-h-0' : ''}`}>
                 {rbTabs.length > 0 && (
