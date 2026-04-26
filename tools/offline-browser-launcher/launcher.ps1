@@ -1,4 +1,4 @@
-# Offline Browser Launcher — runs in background on the rep's PC.
+﻿# Offline Browser Launcher â€” runs in background on the rep's PC.
 # Listens on http://localhost:17345 and opens real Chrome windows in
 # isolated per-customer profiles when the dashboard asks it to.
 #

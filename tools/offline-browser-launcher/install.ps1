@@ -1,4 +1,4 @@
-# Installs Offline Browser Launcher to %LOCALAPPDATA%\OfflineBrowser
+﻿# Installs Offline Browser Launcher to %LOCALAPPDATA%\OfflineBrowser
 # and creates a Startup shortcut that runs it hidden at login.
 
 $ErrorActionPreference = 'Stop'
@@ -36,5 +36,5 @@ try {
   $h = Invoke-RestMethod -Uri 'http://localhost:17345/health' -TimeoutSec 3
   Write-Host "Launcher is running: $($h | ConvertTo-Json -Compress)" -ForegroundColor Green
 } catch {
-  Write-Host "Could not reach http://localhost:17345/health yet — give it a moment." -ForegroundColor Yellow
+  Write-Host "Could not reach http://localhost:17345/health yet - give it a moment." -ForegroundColor Yellow
 }
