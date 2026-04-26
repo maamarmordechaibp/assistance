@@ -65,7 +65,12 @@ serve(async (req) => {
   const avgSeconds = recentCalls && recentCalls.length > 0
     ? recentCalls.reduce((sum: number, c: { billable_duration_seconds: number }) => sum + c.billable_duration_seconds, 0) / recentCalls.length
     : 300;
-  const estimatedWaitMinutes = Math.max(1, Math.ceil((avgSeconds * position) / 60));
+  // When the caller is #1 in queue, no one is ahead of them — the rep
+  // typically picks up within seconds, so cap the announced wait at 1 minute.
+  // For anyone behind them, fall back to (avg call length × position).
+  const estimatedWaitMinutes = position <= 1
+    ? 1
+    : Math.max(1, Math.ceil((avgSeconds * (position - 1)) / 60));
 
   const elements: string[] = [];
 
@@ -80,27 +85,25 @@ serve(async (req) => {
     elements.push(laml.say(`You are currently number ${position} in the queue. Estimated wait: about ${estimatedWaitMinutes} minute${estimatedWaitMinutes === 1 ? '' : 's'}. A representative will be with you shortly.`));
   }
 
-  // Play hold music
-  if (holdMusicUrl) {
-    elements.push(laml.play(holdMusicUrl));
-  } else {
-    // Default: SignalWire-hosted public hold music so there's always audio.
-    elements.push(laml.play('https://cdn.signalwire.com/default-music/welcome.mp3'));
-  }
-
-  // Periodic served-today announcement
-  const served = servedToday || 0;
-  if (served > 0) {
-    elements.push(laml.say(`We have assisted ${served} customers in the last 24 hours. We appreciate your patience and will be with you shortly.`));
-  } else {
-    elements.push(laml.say('Thank you for holding. A representative will be with you shortly.'));
-  }
-
-  // More hold music / pause before SignalWire re-requests the waitUrl
+  // Play a SHORT music chunk between announcements. SignalWire re-requests
+  // this waitUrl after each chunk, so shorter chunks = more frequent
+  // position updates ("you are number 2 in queue", etc.). Caller hears the
+  // queue status roughly every ~25 seconds instead of every ~2 minutes.
   if (holdMusicUrl) {
     elements.push(laml.play(holdMusicUrl));
   } else {
     elements.push(laml.play('https://cdn.signalwire.com/default-music/welcome.mp3'));
+  }
+
+  // Brief reassurance that overrides music — only every other loop to avoid
+  // chatter. We use queueTimeSeconds % 60 as a simple parity flag.
+  if (queueTimeSeconds > 30 && Math.floor(queueTimeSeconds / 30) % 2 === 0) {
+    const served = servedToday || 0;
+    if (served > 0) {
+      elements.push(laml.say(`Thanks for holding. We've assisted ${served} customers in the last 24 hours. We'll be right with you.`));
+    } else {
+      elements.push(laml.say('Thanks for holding. A representative will be right with you.'));
+    }
   }
 
   const xml = laml.buildLamlResponse(elements);

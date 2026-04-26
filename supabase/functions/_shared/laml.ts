@@ -4,10 +4,12 @@ export function buildLamlResponse(elements: string[]): string {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n${elements.join('\n')}\n</Response>`;
 }
 
-// Default to an Amazon Polly Neural voice — much more natural / human-sounding
-// than the legacy standard voices. SignalWire exposes these via the same
-// `Polly.<Name>-Neural` naming convention Twilio uses.
-export function say(text: string, voice = 'Polly.Matthew-Neural'): string {
+// Default to a warm, expressive Amazon Polly Neural voice — much more
+// human-sounding than the legacy standard voices. SignalWire exposes these
+// via the same `Polly.<Name>-Neural` convention Twilio uses. Joanna-Neural
+// is consistently rated as one of the most natural and friendly female
+// voices, and tends to sound "a bit excited" without being robotic.
+export function say(text: string, voice = 'Polly.Joanna-Neural'): string {
   return `  <Say voice="${voice}">${escapeXml(text)}</Say>`;
 }
 
@@ -15,7 +17,7 @@ export function say(text: string, voice = 'Polly.Matthew-Neural'): string {
  *  prosody engine handles pacing naturally (no robotic pauses between
  *  sentences). Returns a single-element array so callers can spread into
  *  their elements list. */
-export function sayLines(lines: string[], voice = 'Polly.Matthew-Neural'): string[] {
+export function sayLines(lines: string[], voice = 'Polly.Joanna-Neural'): string[] {
   const joined = lines
     .map(l => l.trim())
     .filter(Boolean)

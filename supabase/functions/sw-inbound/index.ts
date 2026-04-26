@@ -482,14 +482,25 @@ serve(async (req) => {
   if (step === 'agent-menu' && customerId) {
     const elements: string[] = [];
     if (!digits) {
+      // Fetch current balance so we can announce it before the agent options.
+      const { data: cust } = await supabase
+        .from('customers')
+        .select('current_balance_minutes, full_name')
+        .eq('id', customerId)
+        .single();
+      const mins = cust?.current_balance_minutes ?? 0;
+
+      const lines: string[] = [];
+      lines.push(formatMinuteAnnouncement(mins, 'You currently have {minutes} minutes on your account.'));
+      lines.push('To speak with the next available agent, press 1.');
+      lines.push('To buy more minutes, press star then 2.');
+      lines.push('To connect with a specific extension, press 2.');
+      lines.push('To reconnect with the agent from your most recent call, press 3.');
+      lines.push('To return to the main menu, press star.');
+
       elements.push(laml.gather(
         { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=agent-menu&customerId=${customerId}`, timeout: 10 },
-        laml.sayLines([
-          'To speak with the next available agent, press 1.',
-          'To connect with a specific extension, press 2.',
-          'To reconnect with the agent from your most recent call, press 3.',
-          'To return to the main menu, press star.',
-        ])
+        laml.sayLines(lines)
       ));
       elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
       return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
@@ -534,6 +545,7 @@ serve(async (req) => {
   }
 
   // ── 2) Balance & Minutes submenu ──
+  //    1: hear balance   2: list packages   3: one-tap refill (last package)
   if (step === 'balance-menu' && customerId) {
     const elements: string[] = [];
     if (!digits) {
@@ -541,7 +553,8 @@ serve(async (req) => {
         { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=balance-menu&customerId=${customerId}`, timeout: 10 },
         laml.sayLines([
           'To hear your current minute balance, press 1.',
-          'To add more minutes to your account, press 2.',
+          'To hear our minute packages, press 2.',
+          'To refill using the last package you bought, press 3.',
           'To return to the main menu, press star.',
         ])
       ));
@@ -556,6 +569,24 @@ serve(async (req) => {
       elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
     } else if (digits === '2') {
       elements.push(laml.redirect(`${baseUrl}/sw-package-select?customerId=${customerId}`));
+    } else if (digits === '3') {
+      // Auto-refill using the most recent package the customer purchased.
+      const { data: lastPayment } = await supabase
+        .from('payments')
+        .select('package_id, payment_packages(id, name, minutes, price, is_active)')
+        .eq('customer_id', customerId)
+        .eq('status', 'completed')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const pkg = (lastPayment as { payment_packages?: { id: string; name: string; minutes: number; price: number; is_active: boolean } } | null)?.payment_packages;
+      if (pkg && pkg.is_active) {
+        elements.push(laml.say(`Great — refilling your last package: ${pkg.name}, ${pkg.minutes} minutes for ${pkg.price} dollars.`));
+        elements.push(laml.redirect(`${baseUrl}/sw-package-select?customerId=${customerId}&autoSelect=${pkg.id}`));
+      } else {
+        elements.push(laml.say("I don't see a previous package to refill yet — let me read you our options."));
+        elements.push(laml.redirect(`${baseUrl}/sw-package-select?customerId=${customerId}`));
+      }
     } else {
       elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
     }
@@ -683,17 +714,43 @@ serve(async (req) => {
   }
 
   // ── Initial inbound call ──
+  // Normalise the inbound number so a customer saved as `8453762437` matches
+  // a SignalWire-supplied `+18453762437`, etc.
+  const fromDigits = from.replace(/[^0-9]/g, '');
+  const phoneVariants = new Set<string>([from]);
+  if (fromDigits.length === 11 && fromDigits.startsWith('1')) {
+    phoneVariants.add(`+${fromDigits}`);
+    phoneVariants.add(fromDigits);
+    phoneVariants.add(fromDigits.slice(1));            // 10-digit
+    phoneVariants.add(`+1${fromDigits.slice(1)}`);
+  } else if (fromDigits.length === 10) {
+    phoneVariants.add(fromDigits);
+    phoneVariants.add(`+1${fromDigits}`);
+    phoneVariants.add(`1${fromDigits}`);
+    phoneVariants.add(`+${fromDigits}`);
+  }
+  const variantsList = Array.from(phoneVariants);
+  const orFilter = variantsList
+    .flatMap(v => [`primary_phone.eq.${v}`, `secondary_phone.eq.${v}`])
+    .join(',');
   let { data: customer } = await supabase
     .from('customers')
     .select('*')
-    .or(`primary_phone.eq.${from},secondary_phone.eq.${from}`)
+    .or(orFilter)
     .eq('status', 'active')
-    .single();
+    .limit(1)
+    .maybeSingle();
 
   if (!customer) {
+    // Always store new customers in E.164 so future lookups are deterministic.
+    const e164 = fromDigits.length === 10
+      ? `+1${fromDigits}`
+      : fromDigits.length === 11 && fromDigits.startsWith('1')
+        ? `+${fromDigits}`
+        : from;
     const { data: newCustomer } = await supabase.from('customers').insert({
-      full_name: `Caller ${from}`,
-      primary_phone: from,
+      full_name: `Caller ${e164}`,
+      primary_phone: e164,
       status: 'active',
       current_balance_minutes: 0,
       total_minutes_purchased: 0,
@@ -742,43 +799,45 @@ serve(async (req) => {
 
     // Build greeting lines (played inside a <Gather> so caller can barge-in
     // with a digit instead of listening to the whole thing).
+    // Slogan & vibe per Apr-2026 brand refresh: warm, confident, alive.
     const greetingLines = isNewCaller
       ? [
-          'Thank you for calling Offline.',
-          "Stay offline — we'll handle the online.",
-          'Please listen carefully and select from the following options.',
+          'Hi there, and thanks for calling Offline!',
+          "We're your real human team for everything online — shopping, bills, forms, accounts, you name it.",
+          "Stay offline, and we'll handle the online for you.",
+          'By continuing this call, you agree to our terms and conditions.',
         ]
       : [
-          `Welcome back, ${customer.full_name}.`,
-          "Stay offline — we'll handle the online.",
+          `Hey ${customer.full_name}, welcome back to Offline!`,
+          "Great to hear from you again — let's get you taken care of.",
         ];
 
     const announcementText0 = (settingsMap.minute_announcement_text as string) || 'You currently have {minutes} minutes remaining.';
-    const announcement = announcementEnabled
-      ? formatMinuteAnnouncement(customer.current_balance_minutes, announcementText0)
-      : '';
+    // NOTE: balance is NOT announced in the greeting any more — it now plays
+    //       only after the caller selects "0" (live agent), per spec.
+    const announcement = formatMinuteAnnouncement(customer.current_balance_minutes, announcementText0);
+    void announcement; // kept for downstream reuse, see agent-menu
 
     const lowBalanceThreshold = Number(settingsMap.low_balance_threshold) || 10;
 
     if (customer.current_balance_minutes > 0 && customer.current_balance_minutes <= lowBalanceThreshold) {
-      // Low-balance path: greet + balance + low-balance choice, all inside
+      // Low-balance path: greet + low-balance choice, all inside
       // a single <Gather> so caller can press 1/2 at any point.
       const sayLines = [...greetingLines];
-      if (announcement) sayLines.push(announcement);
-      sayLines.push('Your balance is getting low. Press 1 to add minutes now, or press 2 to continue.');
+      sayLines.push(announcementEnabled ? announcement : '');
+      sayLines.push("Heads up — you're running low on minutes. Press 1 to top up now, or press 2 to continue.");
       elements.push(
         laml.gather(
           { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=low-balance-choice&customerId=${customer.id}`, timeout: 8 },
-          laml.sayLines(sayLines)
+          laml.sayLines(sayLines.filter(Boolean))
         )
       );
       elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=menu&customerId=${customer.id}`));
     } else if (isReturningCaller) {
-      // Returning-caller fast-path: greet + balance + "press 1 for rep" all
+      // Returning-caller fast-path: greet + "press 1 for rep" all
       // inside one <Gather> so any digit barge-in jumps straight to menu.
       const sayLines = [...greetingLines];
-      if (announcement) sayLines.push(announcement);
-      sayLines.push('Press 1 to speak with a representative, or stay on the line for more options.');
+      sayLines.push('Press 1 to speak with a representative right now, or stay on the line for more options.');
       elements.push(
         laml.gather(
           { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=fast-rep&customerId=${customer.id}`, timeout: 6 },
@@ -787,25 +846,24 @@ serve(async (req) => {
       );
       // Timeout fallback — show full menu
       elements.push(buildMenuGather(baseUrl, customer));
-      elements.push(laml.say('No input received. Connecting you to a representative.'));
+      elements.push(laml.say("No worries — let me connect you to a representative."));
       elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=connect-rep&customerId=${customer.id}`));
     } else {
-      // New caller — greet + balance + full menu, all inside one <Gather>.
+      // New caller — greet + full menu, all inside one <Gather>.
       const sayLines = [...greetingLines];
-      if (announcement) sayLines.push(announcement);
       sayLines.push(
-        'To connect with a live agent, press 0.',
+        'For a live agent, press 0.',
         'For company information, press 1.',
-        'To hear your balance or add more minutes, press 2.',
-        'To update your information or securely save your credit card details, press 3.',
+        'For minutes and packages, press 2.',
+        'To update your account info or save a card on file, press 3.',
         'To leave a message for the Yiddish admin office, press 4.',
-        'To hear our terms, conditions, and security measures, press 7.',
+        'For terms, conditions, and our security policy, press 7.',
       );
       elements.push(laml.gather(
         { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=menu&customerId=${customer.id}`, timeout: 10 },
         laml.sayLines(sayLines)
       ));
-      elements.push(laml.say('No input received. Connecting you to a representative.'));
+      elements.push(laml.say("No worries — let me connect you to a representative."));
       elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=connect-rep&customerId=${customer.id}`));
     }
   } else {
@@ -827,12 +885,12 @@ serve(async (req) => {
 // ── Helper: build the <Gather> for the main menu (Offline IVR spec) ──
 function buildMenuGather(baseUrl: string, customer: { id: string; preferred_rep_id?: string | null; current_balance_minutes: number }): string {
   const lines: string[] = [
-    'To connect with a live agent, press 0.',
+    'For a live agent, press 0.',
     'For company information, press 1.',
-    'To hear your balance or add more minutes, press 2.',
-    'To update your information or securely save your credit card details, press 3.',
+    'For minutes and packages, press 2.',
+    'To update your account info or save a card on file, press 3.',
     'To leave a message for the Yiddish admin office, press 4.',
-    'To hear our terms, conditions, and security measures, press 7.',
+    'For terms, conditions, and our security policy, press 7.',
   ];
   return laml.gather(
     { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=menu&customerId=${customer.id}`, timeout: 10 },

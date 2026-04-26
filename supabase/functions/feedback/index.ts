@@ -35,15 +35,14 @@ serve(async (req) => {
     if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
     // Calculate average rating per rep if no filters
-    let summary = null;
+    let summary: { repId: string; repName: string; avgRating: number; totalReviews: number }[] | null = null;
     if (!repId && !customerId) {
-      const { data: avgData } = await supabase.rpc('', {}).catch(() => ({ data: null }));
-      // Manual aggregation
       if (data && data.length > 0) {
         const byRep: Record<string, { total: number; count: number; name: string }> = {};
         for (const fb of data) {
           const rid = fb.rep_id;
-          if (!byRep[rid]) byRep[rid] = { total: 0, count: 0, name: (fb.reps as { full_name: string })?.full_name || 'Unknown' };
+          if (!rid) continue;
+          if (!byRep[rid]) byRep[rid] = { total: 0, count: 0, name: (fb.reps as { full_name: string } | null)?.full_name || 'Unknown' };
           byRep[rid].total += fb.rating;
           byRep[rid].count += 1;
         }
@@ -56,7 +55,7 @@ serve(async (req) => {
       }
     }
 
-    return new Response(JSON.stringify({ feedback: data, summary }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ feedback: data ?? [], summary: summary ?? [] }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 
   if (req.method === 'POST') {

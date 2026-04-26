@@ -19,10 +19,39 @@ serve(async (req) => {
   const supabase = createServiceClient();
   const elements: string[] = [];
 
+  // ── One-tap refill: caller chose 2>3# in the IVR ──
+  // We jump straight to the "press 1 to confirm" step for the supplied
+  // package id, skipping the listing.
+  const autoSelect = url.searchParams.get('autoSelect');
+  if (autoSelect && step === 'choice' && !digits) {
+    const { data: pkg } = await supabase
+      .from('payment_packages')
+      .select('id, name, minutes, price, is_active')
+      .eq('id', autoSelect)
+      .eq('is_active', true)
+      .maybeSingle();
+    if (pkg) {
+      elements.push(
+        laml.gather(
+          {
+            input: 'dtmf',
+            numDigits: 1,
+            action: `${baseUrl}/sw-package-select?step=proceed&customerId=${customerId}&packageId=${pkg.id}`,
+            timeout: 10,
+          },
+          [laml.say(`Refilling the ${pkg.name} package: ${pkg.minutes} minutes for ${pkg.price} dollars. Press 1 to confirm and enter your credit card, or press 2 to choose a different package.`)]
+        )
+      );
+      const xmlR = laml.buildLamlResponse(elements);
+      return new Response(xmlR, { headers: { 'Content-Type': 'application/xml' } });
+    }
+  }
+
   if (step === 'choice') {
-    // Caller pressed 1 (buy) or 2 (skip to rep)
-    if (digits === '2' || !digits) {
-      // Skip to queue
+    // First entry to the package menu: list packages and let the caller
+    // pick a number, or 0 to skip to a rep. (Old behavior: !digits skipped
+    // straight to queue, which broke 2>2 in the new IVR tree.)
+    if (digits === '0') {
       elements.push(laml.say('Connecting you to a representative now.'));
       elements.push(laml.enqueue('main-queue', `${baseUrl}/sw-queue-wait`));
     } else {
@@ -38,9 +67,11 @@ serve(async (req) => {
         elements.push(laml.enqueue('main-queue', `${baseUrl}/sw-queue-wait`));
       } else {
         const announcements: string[] = [];
-        packages.forEach((pkg: { name: string; minutes: number; price: number }, i: number) => {
+        packages.forEach((pkg: { name: string; minutes: number; price: number; description?: string | null }, i: number) => {
           const num = i + 1;
-          announcements.push(laml.say(`Press ${num} for the ${pkg.name} package. ${pkg.minutes} minutes for $${pkg.price}.`));
+          const desc = (pkg.description || '').trim();
+          const main = `Press ${num} for the ${pkg.name} package: ${pkg.minutes} minutes for ${pkg.price} dollars.`;
+          announcements.push(laml.say(desc ? `${main} ${desc}` : main));
           announcements.push(laml.pause(1));
         });
 
