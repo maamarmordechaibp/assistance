@@ -19,6 +19,8 @@ import {
   Package,
   Wallet,
   Star,
+  Voicemail,
+  MessageSquare,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -40,10 +42,12 @@ const adminLinks = [
   { href: '/admin/customers', label: 'Customers', icon: Users },
   { href: '/admin/reps', label: 'Representatives', icon: Phone },
   { href: '/admin/calls', label: 'Call Review', icon: FileText },
+  { href: '/admin/voicemails', label: 'Voicemails', icon: Voicemail },
   { href: '/admin/feedback', label: 'Feedback', icon: Star },
   { href: '/admin/packages', label: 'Packages', icon: Package },
   { href: '/admin/finance', label: 'Finance', icon: Wallet },
   { href: '/admin/reports', label: 'Reports', icon: BarChart3 },
+  { href: '/admin/ivr', label: 'IVR Editor', icon: MessageSquare },
   { href: '/admin/settings', label: 'Settings', icon: Settings },
 ];
 

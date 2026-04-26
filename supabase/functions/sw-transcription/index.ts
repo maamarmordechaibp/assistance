@@ -8,10 +8,10 @@ serve(async (req) => {
   }
 
   const body = await req.json();
-  const { callId, storagePath } = body;
+  const { callId, voicemailId, storagePath } = body;
 
-  if (!callId || !storagePath) {
-    return new Response(JSON.stringify({ error: 'Missing callId or storagePath' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+  if ((!callId && !voicemailId) || !storagePath) {
+    return new Response(JSON.stringify({ error: 'Missing callId/voicemailId or storagePath' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
   }
 
   const supabase = createServiceClient();
@@ -40,10 +40,14 @@ serve(async (req) => {
       body: formData,
     });
 
-    const transcription = await whisperRes.text();
+    const transcription = (await whisperRes.text()).trim();
 
-    // Save transcript to call record
-    await supabase.from('calls').update({ transcript_text: transcription }).eq('id', callId);
+    if (callId) {
+      await supabase.from('calls').update({ transcript_text: transcription }).eq('id', callId);
+    }
+    if (voicemailId) {
+      await supabase.from('voicemails').update({ transcript_text: transcription }).eq('id', voicemailId);
+    }
 
     return new Response(JSON.stringify({ ok: true, transcript: transcription }), { headers: { 'Content-Type': 'application/json' } });
   } catch (err) {

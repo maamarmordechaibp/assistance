@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Settings, Save, Loader2 } from 'lucide-react';
+import { Settings, Save, Loader2, Upload, Trash2, Play } from 'lucide-react';
 import { edgeFn } from '@/lib/supabase/edge';
+import { createClient } from '@/lib/supabase/client';
 
 interface Setting {
   id: string;
@@ -94,6 +95,14 @@ export default function AdminSettings() {
         Settings
       </h2>
 
+      <HoldMusicUploader
+        currentUrl={typeof settings.find(s => s.key === 'hold_music_url')?.value === 'string' ? settings.find(s => s.key === 'hold_music_url')!.value as string : ''}
+        onSaved={(url) => {
+          setSettings(prev => prev.map(s => s.key === 'hold_music_url' ? { ...s, value: url } : s));
+          setEditValues(prev => ({ ...prev, hold_music_url: url }));
+        }}
+      />
+
       {Object.entries(groups).map(([group, items]) => (
         <div key={group} className="bg-white rounded-xl shadow-sm border">
           <div className="px-6 py-4 border-b">
@@ -134,6 +143,94 @@ export default function AdminSettings() {
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+function HoldMusicUploader({ currentUrl, onSaved }: { currentUrl: string; onSaved: (url: string) => void }) {
+  const [uploading, setUploading] = useState(false);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+
+  async function handleUpload() {
+    if (!pendingFile) return;
+    setUploading(true);
+    try {
+      const supabase = createClient();
+      const ext = pendingFile.name.split('.').pop()?.toLowerCase() || 'mp3';
+      const path = `custom-${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from('hold-music')
+        .upload(path, pendingFile, { upsert: true, contentType: pendingFile.type || 'audio/mpeg' });
+      if (upErr) throw upErr;
+      const { data: pub } = supabase.storage.from('hold-music').getPublicUrl(path);
+      const url = pub.publicUrl;
+      const res = await edgeFn('settings', {
+        method: 'PATCH',
+        body: JSON.stringify({ key: 'hold_music_url', value: url }),
+      });
+      if (!res.ok) throw new Error('Save failed');
+      onSaved(url);
+      setPendingFile(null);
+      toast.success('Hold music updated. Callers will hear it on the next call.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function clearMusic() {
+    if (!confirm('Reset hold music to the SignalWire default?')) return;
+    const res = await edgeFn('settings', {
+      method: 'PATCH',
+      body: JSON.stringify({ key: 'hold_music_url', value: '' }),
+    });
+    if (res.ok) {
+      onSaved('');
+      toast.success('Reset to default music');
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm border">
+      <div className="px-6 py-4 border-b">
+        <h3 className="font-semibold flex items-center gap-2">
+          <Play className="w-4 h-4" /> Hold music
+        </h3>
+        <p className="text-xs text-gray-500 mt-1">Upload an MP3/WAV that callers hear while waiting in queue.</p>
+      </div>
+      <div className="px-6 py-4 space-y-3">
+        {currentUrl ? (
+          <div className="flex items-center gap-3 p-3 bg-gray-50 rounded">
+            <audio controls src={currentUrl} className="flex-1 max-w-md" />
+            <button
+              onClick={clearMusic}
+              className="p-2 rounded hover:bg-red-50 text-red-600"
+              title="Reset to default"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+        ) : (
+          <div className="text-sm text-gray-500 italic">Using SignalWire default hold music.</div>
+        )}
+        <div className="flex items-center gap-3">
+          <input
+            type="file"
+            accept="audio/*"
+            onChange={(e) => setPendingFile(e.target.files?.[0] || null)}
+            className="text-sm"
+          />
+          <button
+            onClick={handleUpload}
+            disabled={!pendingFile || uploading}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 text-sm"
+          >
+            {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+            Upload
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

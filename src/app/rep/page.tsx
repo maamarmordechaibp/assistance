@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client';
 import { formatMinutes, formatDuration, formatPhone } from '@/lib/utils';
 import { toast } from 'sonner';
 import Softphone from '@/components/softphone/softphone';
+import ProductSearchPanel from '@/components/rep/product-search-panel';
 import {
   Phone,
   PhoneOff,
@@ -1227,6 +1228,15 @@ export default function RepDashboard() {
               </div>
             )}
           </div>
+
+          {/* Customer Browser (Browserbase) — only visible while on a call */}
+          {activeCall && customer && (
+            <ProductSearchPanel
+              customerId={customer.id}
+              customerEmail={customer.email}
+              callId={activeCall.id}
+            />
+          )}
 
           {/* Customer Browser (Browserbase) — only visible while on a call */}
           {activeCall && customer && (

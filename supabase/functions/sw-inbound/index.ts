@@ -5,6 +5,7 @@ import * as laml from '../_shared/laml.ts';
 import { formatMinuteAnnouncement } from '../_shared/utils.ts';
 import { enqueueCaller } from '../_shared/callQueue.ts';
 import { getSubscriberAddressPath } from '../_shared/signalwire.ts';
+import { promptLines } from '../_shared/promptStore.ts';
 
 serve(async (req) => {
   if (req.method !== 'POST') {
@@ -490,13 +491,17 @@ serve(async (req) => {
         .single();
       const mins = cust?.current_balance_minutes ?? 0;
 
+      const menuLines = await promptLines('agent_menu', [
+        'To speak with the next available agent, press 1.',
+        'To buy more minutes, press star then 2.',
+        'To connect with a specific extension, press 2.',
+        'To reconnect with the agent from your most recent call, press 3.',
+        'To return to the main menu, press star.',
+      ]);
+
       const lines: string[] = [];
       lines.push(formatMinuteAnnouncement(mins, 'You currently have {minutes} minutes on your account.'));
-      lines.push('To speak with the next available agent, press 1.');
-      lines.push('To buy more minutes, press star then 2.');
-      lines.push('To connect with a specific extension, press 2.');
-      lines.push('To reconnect with the agent from your most recent call, press 3.');
-      lines.push('To return to the main menu, press star.');
+      lines.push(...menuLines);
 
       elements.push(laml.gather(
         { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=agent-menu&customerId=${customerId}`, timeout: 10 },
@@ -549,14 +554,15 @@ serve(async (req) => {
   if (step === 'balance-menu' && customerId) {
     const elements: string[] = [];
     if (!digits) {
+      const menuLines = await promptLines('balance_menu', [
+        'To hear your current minute balance, press 1.',
+        'To hear our minute packages, press 2.',
+        'To refill using the last package you bought, press 3.',
+        'To return to the main menu, press star.',
+      ]);
       elements.push(laml.gather(
         { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=balance-menu&customerId=${customerId}`, timeout: 10 },
-        laml.sayLines([
-          'To hear your current minute balance, press 1.',
-          'To hear our minute packages, press 2.',
-          'To refill using the last package you bought, press 3.',
-          'To return to the main menu, press star.',
-        ])
+        laml.sayLines(menuLines)
       ));
       elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
       return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
@@ -597,24 +603,84 @@ serve(async (req) => {
   if (step === 'account-menu' && customerId) {
     const elements: string[] = [];
     if (!digits) {
+      const menuLines = await promptLines('account_menu', [
+        'To update your name, phone, email, and mailing address with our automated system, press 1.',
+        'To securely save your credit card on file, press 2.',
+        'To return to the main menu, press star.',
+      ]);
       elements.push(laml.gather(
         { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=account-menu&customerId=${customerId}`, timeout: 10 },
-        laml.sayLines([
-          'To update your account information, press 1.',
-          'To securely save your credit card details for future use, press 2.',
-          'To return to the main menu, press star.',
-        ])
+        laml.sayLines(menuLines)
       ));
       elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
       return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
     }
     if (digits === '1') {
-      elements.push(laml.redirect(`${baseUrl}/sw-account-lookup?customerId=${customerId}`));
+      elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=account-update&field=name&customerId=${customerId}`));
     } else if (digits === '2') {
       elements.push(laml.redirect(`${baseUrl}/sw-payment-gather?customerId=${customerId}&mode=save`));
     } else {
       elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
     }
+    return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+  }
+
+  // ── 3>1) Automated account update (speech-driven) ──
+  // Walks the caller through name → email → mailing address. Phone is
+  // implicit from CallerID. Speech results are saved to the customers row.
+  if (step === 'account-update' && customerId) {
+    const field = url.searchParams.get('field') || 'name';
+    const speechRaw = (formData.get('SpeechResult') as string | null) || '';
+    const speech = speechRaw.trim();
+    const elements: string[] = [];
+
+    // Persist whatever was just captured before moving to the next field.
+    if (speech) {
+      const updates: Record<string, string> = {};
+      if (field === 'name') updates.full_name = speech;
+      else if (field === 'email') updates.email = speech.replace(/\s+/g, '').toLowerCase();
+      else if (field === 'address') updates.address = speech;
+      if (Object.keys(updates).length) {
+        await supabase.from('customers').update(updates).eq('id', customerId);
+      }
+    }
+
+    // Decide what to ask next.
+    let prompt = '';
+    let nextField = '';
+    if (field === 'name') {
+      prompt = speech
+        ? `Thanks. I've saved your name as ${speech}. Now, please say your email address — letter by letter if it's tricky.`
+        : "Let's update your account. Please say your full name.";
+      nextField = speech ? 'email' : 'name';
+    } else if (field === 'email') {
+      prompt = speech
+        ? `Got it. Now, please say your full mailing address, including city, state, and zip code.`
+        : "Please say your email address.";
+      nextField = speech ? 'address' : 'email';
+    } else if (field === 'address') {
+      if (speech) {
+        elements.push(...laml.sayLines([
+          "All set — your account has been updated. Thank you!",
+        ]));
+        elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
+        return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+      }
+      prompt = "Please say your full mailing address, including city, state, and zip code.";
+      nextField = 'address';
+    }
+
+    elements.push(laml.gatherSpeech(
+      {
+        action: `${baseUrl}/sw-inbound?step=account-update&field=${nextField}&customerId=${customerId}`,
+        timeout: 8,
+        speechTimeout: 'auto',
+      },
+      laml.sayLines([prompt])
+    ));
+    // If they say nothing, retry once then bail to main menu.
+    elements.push(laml.say("I didn't catch that — let me take you back to the main menu."));
+    elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
     return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
   }
 
@@ -641,6 +707,49 @@ serve(async (req) => {
   }
 
   if (step === 'voicemail-complete' && customerId) {
+    // SignalWire posts RecordingUrl / RecordingSid / RecordingDuration here.
+    // Download the audio to Supabase Storage and create a `voicemails` row
+    // so admins can listen and read transcripts in the dashboard.
+    const mailbox = url.searchParams.get('mailbox') || 'yiddish';
+    const recordingUrl = (formData.get('RecordingUrl') as string) || '';
+    const recordingSid = (formData.get('RecordingSid') as string) || '';
+    const recordingDuration = parseInt((formData.get('RecordingDuration') as string) || '0', 10) || null;
+
+    if (recordingUrl && recordingSid) {
+      try {
+        // Lazy import to keep the hot path of other steps fast.
+        const { downloadRecording } = await import('../_shared/signalwire.ts');
+        const audioBuffer = await downloadRecording(recordingUrl + '.wav');
+        const storagePath = `voicemails/${mailbox}/${recordingSid}.wav`;
+        await supabase.storage
+          .from('call-recordings')
+          .upload(storagePath, audioBuffer, { contentType: 'audio/wav', upsert: true });
+
+        const { data: vm } = await supabase.from('voicemails').insert({
+          customer_id: customerId,
+          caller_phone: from,
+          mailbox,
+          recording_sid: recordingSid,
+          recording_url: recordingUrl,
+          recording_storage_path: storagePath,
+          duration_seconds: recordingDuration,
+        }).select('id').single();
+
+        // Fire-and-forget transcription (Whisper).
+        const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+        const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+        if (vm?.id) {
+          fetch(`${supabaseUrl}/functions/v1/sw-transcription`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${serviceKey}` },
+            body: JSON.stringify({ voicemailId: vm.id, storagePath }),
+          }).catch(() => {});
+        }
+      } catch (err) {
+        console.error('voicemail save error:', err);
+      }
+    }
+
     const elements = [
       ...laml.sayLines([
         'Your message has been received.',
@@ -655,13 +764,14 @@ serve(async (req) => {
   if (step === 'terms-menu' && customerId) {
     const elements: string[] = [];
     if (!digits) {
+      const menuLines = await promptLines('terms_menu', [
+        'To hear our terms and conditions, press 1.',
+        'To hear our security measures, press 2.',
+        'To return to the main menu, press star.',
+      ]);
       elements.push(laml.gather(
         { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=terms-menu&customerId=${customerId}`, timeout: 10 },
-        laml.sayLines([
-          'To hear our terms and conditions, press 1.',
-          'To hear our security measures, press 2.',
-          'To return to the main menu, press star.',
-        ])
+        laml.sayLines(menuLines)
       ));
       elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
       return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
@@ -710,7 +820,7 @@ serve(async (req) => {
   // ── Replay menu (after T&C or invalid input) ──
   if ((step === 'replay' || step === 'menu') && customerId && !digits) {
     const { data: customer } = await supabase.from('customers').select('*').eq('id', customerId).single();
-    return new Response(buildMainMenu(baseUrl, customer, customerId), { headers: { 'Content-Type': 'application/xml' } });
+    return new Response(await buildMainMenu(baseUrl, customer, customerId), { headers: { 'Content-Type': 'application/xml' } });
   }
 
   // ── Initial inbound call ──
@@ -800,17 +910,18 @@ serve(async (req) => {
     // Build greeting lines (played inside a <Gather> so caller can barge-in
     // with a digit instead of listening to the whole thing).
     // Slogan & vibe per Apr-2026 brand refresh: warm, confident, alive.
+    // Pulled from `ivr_prompts` so admins can edit without redeploying.
     const greetingLines = isNewCaller
-      ? [
+      ? await promptLines('greeting_new', [
           'Hi there, and thanks for calling Offline!',
           "We're your real human team for everything online — shopping, bills, forms, accounts, you name it.",
           "Stay offline, and we'll handle the online for you.",
           'By continuing this call, you agree to our terms and conditions.',
-        ]
-      : [
+        ])
+      : await promptLines('greeting_returning', [
           `Hey ${customer.full_name}, welcome back to Offline!`,
           "Great to hear from you again — let's get you taken care of.",
-        ];
+        ], { full_name: customer.full_name });
 
     const announcementText0 = (settingsMap.minute_announcement_text as string) || 'You currently have {minutes} minutes remaining.';
     // NOTE: balance is NOT announced in the greeting any more — it now plays
@@ -845,20 +956,20 @@ serve(async (req) => {
         )
       );
       // Timeout fallback — show full menu
-      elements.push(buildMenuGather(baseUrl, customer));
+      elements.push(await buildMenuGather(baseUrl, customer));
       elements.push(laml.say("No worries — let me connect you to a representative."));
       elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=connect-rep&customerId=${customer.id}`));
     } else {
       // New caller — greet + full menu, all inside one <Gather>.
-      const sayLines = [...greetingLines];
-      sayLines.push(
+      const menuLines = await promptLines('main_menu', [
         'For a live agent, press 0.',
         'For company information, press 1.',
         'For minutes and packages, press 2.',
         'To update your account info or save a card on file, press 3.',
         'To leave a message for the Yiddish admin office, press 4.',
         'For terms, conditions, and our security policy, press 7.',
-      );
+      ]);
+      const sayLines = [...greetingLines, ...menuLines];
       elements.push(laml.gather(
         { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=menu&customerId=${customer.id}`, timeout: 10 },
         laml.sayLines(sayLines)
@@ -883,15 +994,15 @@ serve(async (req) => {
 });
 
 // ── Helper: build the <Gather> for the main menu (Offline IVR spec) ──
-function buildMenuGather(baseUrl: string, customer: { id: string; preferred_rep_id?: string | null; current_balance_minutes: number }): string {
-  const lines: string[] = [
+async function buildMenuGather(baseUrl: string, customer: { id: string; preferred_rep_id?: string | null; current_balance_minutes: number }): Promise<string> {
+  const lines = await promptLines('main_menu', [
     'For a live agent, press 0.',
     'For company information, press 1.',
     'For minutes and packages, press 2.',
     'To update your account info or save a card on file, press 3.',
     'To leave a message for the Yiddish admin office, press 4.',
     'For terms, conditions, and our security policy, press 7.',
-  ];
+  ]);
   return laml.gather(
     { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=menu&customerId=${customer.id}`, timeout: 10 },
     laml.sayLines(lines)
@@ -899,16 +1010,14 @@ function buildMenuGather(baseUrl: string, customer: { id: string; preferred_rep_
 }
 
 // ── Helper: build full menu XML for replays ──
-function buildMainMenu(baseUrl: string, customer: { id: string; preferred_rep_id?: string | null; current_balance_minutes: number } | null, customerId: string): string {
+async function buildMainMenu(baseUrl: string, customer: { id: string; preferred_rep_id?: string | null; current_balance_minutes: number } | null, customerId: string): Promise<string> {
   const elements: string[] = [];
   if (customer) {
-    elements.push(buildMenuGather(baseUrl, customer));
+    elements.push(await buildMenuGather(baseUrl, customer));
   } else {
     elements.push(laml.say('Connecting you to a representative.'));
   }
   elements.push(laml.say('No input received. Connecting you to a representative.'));
-  // Note: can't await here (sync helper); route through redirect to connect-rep
-  // which performs the queue insert/enqueue with proper call context.
   elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=connect-rep&customerId=${customerId}`));
   return laml.buildLamlResponse(elements);
 }
