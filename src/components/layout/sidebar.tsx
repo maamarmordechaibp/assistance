@@ -19,6 +19,7 @@ import {
   Star,
   Voicemail,
   MessageSquare,
+  Mail,
   ChevronLeft,
   ChevronRight,
   type LucideIcon,
@@ -43,6 +44,7 @@ interface NavItem {
 const repLinks: NavItem[] = [
   { href: '/rep', label: 'Workspace', icon: LayoutDashboard, group: 'Work' },
   { href: '/rep/callbacks', label: 'Callbacks', icon: PhoneCall, group: 'Work' },
+  { href: '/rep/emails', label: 'Emails', icon: Mail, group: 'Work' },
   { href: '/rep/history', label: 'Call history', icon: History, group: 'Work' },
   { href: '/rep/customers', label: 'Customers', icon: Users, group: 'Records' },
   { href: '/rep/payments', label: 'Payments', icon: CreditCard, group: 'Records' },
@@ -53,6 +55,7 @@ const adminLinks: NavItem[] = [
   { href: '/admin/reports', label: 'Reports', icon: BarChart3, group: 'Overview' },
   { href: '/admin/calls', label: 'Call review', icon: FileText, group: 'Operations' },
   { href: '/admin/voicemails', label: 'Voicemails', icon: Voicemail, group: 'Operations' },
+  { href: '/admin/emails', label: 'Emails', icon: Mail, group: 'Operations' },
   { href: '/admin/feedback', label: 'Feedback', icon: Star, group: 'Operations' },
   { href: '/admin/customers', label: 'Customers', icon: Users, group: 'Records' },
   { href: '/admin/reps', label: 'Representatives', icon: Phone, group: 'Records' },
