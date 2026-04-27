@@ -627,11 +627,11 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
 
   // Color coding based on state
   const stateColors: Record<CallState, string> = {
-    idle: 'bg-gray-100 border-gray-200',
-    connecting: 'bg-yellow-50 border-yellow-200',
-    ringing: 'bg-blue-50 border-blue-200 animate-pulse',
-    active: 'bg-green-50 border-green-200',
-    ending: 'bg-red-50 border-red-200',
+    idle: 'bg-muted border-border',
+    connecting: 'bg-warning/10 border-warning/30',
+    ringing: 'bg-accent/10 border-accent/30 animate-pulse',
+    active: 'bg-success/10 border-success/30',
+    ending: 'bg-destructive/10 border-destructive/30',
   };
 
   const stateLabels: Record<CallState, string> = {
@@ -644,8 +644,8 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
 
   if (!token) {
     return (
-      <div className="bg-gray-50 rounded-xl border p-4 text-center text-sm text-gray-500">
-        <Phone className="w-6 h-6 mx-auto mb-2 text-gray-300" />
+      <div className="bg-muted/40 rounded-xl border p-4 text-center text-sm text-muted-foreground">
+        <Phone className="w-6 h-6 mx-auto mb-2 text-muted-foreground/60" />
         Set yourself as Available to enable the softphone.
       </div>
     );
@@ -662,26 +662,26 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
           <div
             className={`w-2.5 h-2.5 rounded-full ${
               callState === 'active'
-                ? 'bg-green-500'
+                ? 'bg-success'
                 : callState === 'ringing'
-                ? 'bg-blue-500 animate-ping'
+                ? 'bg-accent animate-ping'
                 : connected
-                ? 'bg-green-400'
+                ? 'bg-success/70'
                 : error
-                ? 'bg-red-500'
-                : 'bg-yellow-400 animate-pulse'
+                ? 'bg-destructive'
+                : 'bg-warning/80 animate-pulse'
             }`}
           />
           <span className="text-sm font-medium">{stateLabels[callState]}</span>
         </div>
         {callState === 'active' && (
-          <span className="text-sm font-mono text-gray-600">{formatTime(duration)}</span>
+          <span className="text-sm font-mono text-muted-foreground">{formatTime(duration)}</span>
         )}
       </div>
 
       {/* Error */}
       {error && (
-        <div className="bg-red-100 text-red-700 rounded-lg px-3 py-2 text-xs mb-3">
+        <div className="bg-destructive/15 text-destructive rounded-lg px-3 py-2 text-xs mb-3">
           {error}
         </div>
       )}
@@ -690,7 +690,7 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
       {callerNumber && (
         <div className="text-center mb-3">
           <div className="text-lg font-semibold">{callerNumber}</div>
-          <div className="text-xs text-gray-500">Incoming call</div>
+          <div className="text-xs text-muted-foreground">Incoming call</div>
         </div>
       )}
 
@@ -699,7 +699,7 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
         {callState === 'ringing' && (
           <button
             onClick={answerCall}
-            className="flex items-center gap-2 bg-green-600 text-white px-5 py-2.5 rounded-full font-medium hover:bg-green-700 transition shadow-lg"
+            className="flex items-center gap-2 bg-success text-white px-5 py-2.5 rounded-full font-medium hover:bg-success/90 transition shadow-lg"
           >
             <PhoneIncoming className="w-5 h-5" />
             Answer
@@ -712,8 +712,8 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
               onClick={toggleMute}
               className={`p-2.5 rounded-full transition ${
                 muted
-                  ? 'bg-red-100 text-red-600 hover:bg-red-200'
-                  : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                  ? 'bg-destructive/15 text-destructive hover:bg-destructive/20'
+                  : 'bg-muted text-foreground hover:bg-muted'
               }`}
               title={muted ? 'Unmute' : 'Mute'}
             >
@@ -724,8 +724,8 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
               onClick={toggleDeafen}
               className={`p-2.5 rounded-full transition ${
                 deafened
-                  ? 'bg-red-100 text-red-600 hover:bg-red-200'
-                  : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                  ? 'bg-destructive/15 text-destructive hover:bg-destructive/20'
+                  : 'bg-muted text-foreground hover:bg-muted'
               }`}
               title={deafened ? 'Undeafen' : 'Deafen'}
             >
@@ -737,7 +737,7 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
         {(callState === 'ringing' || callState === 'active') && (
           <button
             onClick={hangup}
-            className="flex items-center gap-2 bg-red-600 text-white px-5 py-2.5 rounded-full font-medium hover:bg-red-700 transition shadow-lg"
+            className="flex items-center gap-2 bg-destructive text-white px-5 py-2.5 rounded-full font-medium hover:bg-destructive/90 transition shadow-lg"
           >
             <PhoneOff className="w-5 h-5" />
             {callState === 'ringing' ? 'Decline' : 'Hang Up'}
@@ -745,16 +745,16 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
         )}
 
         {(callState === 'connecting' || callState === 'ending') && (
-          <Loader2 className="w-6 h-6 animate-spin text-gray-500" />
+          <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
         )}
       </div>
 
       {/* Connection Log */}
       <details className="mt-3">
-        <summary className="text-xs text-gray-400 cursor-pointer hover:text-gray-600">
+        <summary className="text-xs text-muted-foreground/80 cursor-pointer hover:text-muted-foreground">
           Connection Log {connected ? '(Connected)' : '(Disconnected)'}
         </summary>
-        <div className="mt-1 max-h-32 overflow-y-auto bg-gray-50 rounded p-2 text-xs font-mono text-gray-500 space-y-0.5">
+        <div className="mt-1 max-h-32 overflow-y-auto bg-muted/40 rounded p-2 text-xs font-mono text-muted-foreground space-y-0.5">
           {connectionLog.length === 0 ? (
             <div>No events yet</div>
           ) : (

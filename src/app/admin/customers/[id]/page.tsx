@@ -120,29 +120,29 @@ export default function AdminCustomerDetail() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+        <Loader2 className="w-8 h-8 animate-spin text-accent" />
       </div>
     );
   }
 
   if (!customer) {
-    return <div className="text-center py-12 text-gray-500">Customer not found.</div>;
+    return <div className="text-center py-12 text-muted-foreground">Customer not found.</div>;
   }
 
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
-        <Link href="/admin/customers" className="p-2 rounded-lg hover:bg-gray-100">
+        <Link href="/admin/customers" className="p-2 rounded-lg hover:bg-muted">
           <ArrowLeft className="w-5 h-5" />
         </Link>
         <h2 className="text-xl font-semibold">{customer.full_name}</h2>
         <span
           className={`px-2 py-0.5 rounded text-xs font-medium ${
             customer.status === 'active'
-              ? 'bg-green-100 text-green-800'
+              ? 'bg-success/15 text-success'
               : customer.status === 'flagged'
-              ? 'bg-red-100 text-red-800'
-              : 'bg-gray-100 text-gray-800'
+              ? 'bg-destructive/15 text-destructive'
+              : 'bg-muted text-foreground'
           }`}
         >
           {customer.status}
@@ -154,12 +154,12 @@ export default function AdminCustomerDetail() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Customer Info Card */}
-        <div className="bg-white rounded-xl shadow-sm border p-6">
+        <div className="bg-card rounded-xl shadow-sm border p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-semibold">Customer Info</h3>
             <button
               onClick={() => (editing ? handleSave() : setEditing(true))}
-              className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800"
+              className="flex items-center gap-1 text-sm text-accent hover:text-accent"
             >
               {editing ? <Save className="w-4 h-4" /> : <Edit className="w-4 h-4" />}
               {editing ? 'Save' : 'Edit'}
@@ -169,7 +169,7 @@ export default function AdminCustomerDetail() {
             {editing ? (
               <>
                 <div>
-                  <label className="text-gray-500 text-xs">Full Name</label>
+                  <label className="text-muted-foreground text-xs">Full Name</label>
                   <input
                     value={formData.full_name || ''}
                     onChange={(e) => setFormData({ ...formData, full_name: e.target.value })}
@@ -177,7 +177,7 @@ export default function AdminCustomerDetail() {
                   />
                 </div>
                 <div>
-                  <label className="text-gray-500 text-xs">Phone</label>
+                  <label className="text-muted-foreground text-xs">Phone</label>
                   <input
                     value={formData.primary_phone || ''}
                     onChange={(e) => setFormData({ ...formData, primary_phone: e.target.value })}
@@ -185,7 +185,7 @@ export default function AdminCustomerDetail() {
                   />
                 </div>
                 <div>
-                  <label className="text-gray-500 text-xs">Email</label>
+                  <label className="text-muted-foreground text-xs">Email</label>
                   <input
                     value={formData.email || ''}
                     onChange={(e) => setFormData({ ...formData, email: e.target.value })}
@@ -193,7 +193,7 @@ export default function AdminCustomerDetail() {
                   />
                 </div>
                 <div>
-                  <label className="text-gray-500 text-xs">Status</label>
+                  <label className="text-muted-foreground text-xs">Status</label>
                   <select
                     value={formData.status || ''}
                     onChange={(e) => setFormData({ ...formData, status: e.target.value })}
@@ -205,7 +205,7 @@ export default function AdminCustomerDetail() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-gray-500 text-xs">Notes</label>
+                  <label className="text-muted-foreground text-xs">Notes</label>
                   <textarea
                     value={formData.internal_notes || ''}
                     onChange={(e) => setFormData({ ...formData, internal_notes: e.target.value })}
@@ -217,21 +217,21 @@ export default function AdminCustomerDetail() {
             ) : (
               <>
                 <div>
-                  <span className="text-gray-500">Phone:</span> {formatPhone(customer.primary_phone)}
+                  <span className="text-muted-foreground">Phone:</span> {formatPhone(customer.primary_phone)}
                 </div>
                 {customer.secondary_phone && (
                   <div>
-                    <span className="text-gray-500">Alt Phone:</span> {formatPhone(customer.secondary_phone)}
+                    <span className="text-muted-foreground">Alt Phone:</span> {formatPhone(customer.secondary_phone)}
                   </div>
                 )}
                 <div>
-                  <span className="text-gray-500">Email:</span> {customer.email || 'N/A'}
+                  <span className="text-muted-foreground">Email:</span> {customer.email || 'N/A'}
                 </div>
                 <div>
-                  <span className="text-gray-500">Address:</span> {customer.address || 'N/A'}
+                  <span className="text-muted-foreground">Address:</span> {customer.address || 'N/A'}
                 </div>
                 {customer.internal_notes && (
-                  <div className="mt-2 p-2 bg-yellow-50 rounded text-xs">
+                  <div className="mt-2 p-2 bg-warning/10 rounded text-xs">
                     {customer.internal_notes}
                   </div>
                 )}
@@ -241,34 +241,34 @@ export default function AdminCustomerDetail() {
         </div>
 
         {/* Balance Card */}
-        <div className="bg-white rounded-xl shadow-sm border p-6">
+        <div className="bg-card rounded-xl shadow-sm border p-6">
           <h3 className="font-semibold mb-4">Balance Overview</h3>
           <div className="space-y-4">
             <div className="text-center">
-              <div className="text-3xl font-bold text-blue-600">
+              <div className="text-3xl font-bold text-accent">
                 {formatMinutes(customer.current_balance_minutes)}
               </div>
-              <div className="text-sm text-gray-500">Current Balance</div>
+              <div className="text-sm text-muted-foreground">Current Balance</div>
             </div>
             <div className="grid grid-cols-2 gap-4 text-center">
               <div>
-                <div className="text-lg font-semibold text-green-600">
+                <div className="text-lg font-semibold text-success">
                   {formatMinutes(customer.total_minutes_purchased)}
                 </div>
-                <div className="text-xs text-gray-500">Purchased</div>
+                <div className="text-xs text-muted-foreground">Purchased</div>
               </div>
               <div>
-                <div className="text-lg font-semibold text-orange-600">
+                <div className="text-lg font-semibold text-warning">
                   {formatMinutes(customer.total_minutes_used)}
                 </div>
-                <div className="text-xs text-gray-500">Used</div>
+                <div className="text-xs text-muted-foreground">Used</div>
               </div>
             </div>
           </div>
         </div>
 
         {/* Minute Ledger */}
-        <div className="bg-white rounded-xl shadow-sm border p-6">
+        <div className="bg-card rounded-xl shadow-sm border p-6">
           <h3 className="font-semibold mb-4">Recent Transactions</h3>
           <div className="space-y-2 max-h-64 overflow-y-auto">
             {ledger.map((entry) => (
@@ -280,19 +280,19 @@ export default function AdminCustomerDetail() {
                   <span
                     className={`px-1.5 py-0.5 rounded text-xs font-medium ${
                       entry.entry_type === 'purchase'
-                        ? 'bg-green-100 text-green-800'
+                        ? 'bg-success/15 text-success'
                         : entry.entry_type === 'deduction'
-                        ? 'bg-red-100 text-red-800'
-                        : 'bg-blue-100 text-blue-800'
+                        ? 'bg-destructive/15 text-destructive'
+                        : 'bg-accent/15 text-accent'
                     }`}
                   >
                     {entry.entry_type}
                   </span>
-                  <span className="ml-2 text-gray-600 text-xs">{entry.reason}</span>
+                  <span className="ml-2 text-muted-foreground text-xs">{entry.reason}</span>
                 </div>
                 <span
                   className={`font-mono font-medium ${
-                    entry.minutes_amount >= 0 ? 'text-green-600' : 'text-red-600'
+                    entry.minutes_amount >= 0 ? 'text-success' : 'text-destructive'
                   }`}
                 >
                   {entry.minutes_amount > 0 ? '+' : ''}{entry.minutes_amount} min
@@ -300,14 +300,14 @@ export default function AdminCustomerDetail() {
               </div>
             ))}
             {ledger.length === 0 && (
-              <p className="text-sm text-gray-500 text-center py-4">No transactions yet.</p>
+              <p className="text-sm text-muted-foreground text-center py-4">No transactions yet.</p>
             )}
           </div>
         </div>
       </div>
 
       {/* Call History */}
-      <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
+      <div className="bg-card rounded-xl shadow-sm border overflow-hidden">
         <div className="px-6 py-4 border-b">
           <h3 className="font-semibold flex items-center gap-2">
             <History className="w-4 h-4" />
@@ -315,19 +315,19 @@ export default function AdminCustomerDetail() {
           </h3>
         </div>
         <table className="w-full text-sm">
-          <thead className="bg-gray-50 border-b">
+          <thead className="bg-muted/40 border-b">
             <tr>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">Date</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">Rep</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">Category</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">Duration</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">Minutes</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">Outcome</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">Date</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">Rep</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">Category</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">Duration</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">Minutes</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">Outcome</th>
             </tr>
           </thead>
           <tbody className="divide-y">
             {calls.map((call) => (
-              <tr key={call.id} className="hover:bg-gray-50">
+              <tr key={call.id} className="hover:bg-muted/50">
                 <td className="px-4 py-3">{formatDateTime(call.started_at)}</td>
                 <td className="px-4 py-3">{call.rep?.full_name || '—'}</td>
                 <td className="px-4 py-3">{call.task_category?.name || '—'}</td>
@@ -340,10 +340,10 @@ export default function AdminCustomerDetail() {
                     <span
                       className={`px-2 py-0.5 rounded text-xs font-medium ${
                         call.outcome_status === 'resolved'
-                          ? 'bg-green-100 text-green-800'
+                          ? 'bg-success/15 text-success'
                           : call.outcome_status === 'partial'
-                          ? 'bg-yellow-100 text-yellow-800'
-                          : 'bg-red-100 text-red-800'
+                          ? 'bg-warning/15 text-warning'
+                          : 'bg-destructive/15 text-destructive'
                       }`}
                     >
                       {call.outcome_status}

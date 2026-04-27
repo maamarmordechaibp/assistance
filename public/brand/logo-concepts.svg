@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 220" width="600" height="220" role="img" aria-label="Offline logo concepts">
+  <style>
+    .bg { fill: #f3f4f6; }
+    .label { font: 600 12px ui-sans-serif, system-ui, -apple-system, sans-serif; fill: #475569; letter-spacing: 0.08em; text-transform: uppercase; }
+    .name  { font: 700 18px ui-sans-serif, system-ui, -apple-system, sans-serif; fill: #0f172a; }
+    .mark  { fill: none; stroke: #1e3a8a; stroke-width: 12; stroke-linecap: round; }
+    .accent{ stroke: #3b82f6; }
+  </style>
+  <rect class="bg" width="600" height="220" rx="12"/>
+
+  <!-- Concept A: Concentric rings (CHOSEN) -->
+  <g transform="translate(40,40)">
+    <circle cx="60" cy="60" r="52" class="mark"/>
+    <circle cx="60" cy="60" r="28" class="mark accent"/>
+    <circle cx="60" cy="60" r="6" fill="#3b82f6"/>
+    <text x="0" y="150" class="label">Concept A — Chosen</text>
+    <text x="0" y="172" class="name">Concentric Signal</text>
+  </g>
+
+  <!-- Concept B: Strikethrough wave -->
+  <g transform="translate(220,40)">
+    <path d="M5 65 Q22 35 40 60 T75 60 T110 60" class="mark" fill="none"/>
+    <line x1="10" y1="95" x2="115" y2="25" class="mark accent"/>
+    <text x="0" y="150" class="label">Concept B</text>
+    <text x="0" y="172" class="name">Quieted Wave</text>
+  </g>
+
+  <!-- Concept C: Offset O -->
+  <g transform="translate(400,40)">
+    <circle cx="55" cy="60" r="42" class="mark"/>
+    <circle cx="78" cy="60" r="42" class="mark accent" opacity="0.85"/>
+    <text x="0" y="150" class="label">Concept C</text>
+    <text x="0" y="172" class="name">Offset Aperture</text>
+  </g>
+</svg>

@@ -1,9 +1,10 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { formatDuration, formatPhone, formatDateTime } from '@/lib/utils';
+import { PageHeader } from '@/components/ui/page';
 import { History, Search, ChevronLeft, ChevronRight, PhoneCall } from 'lucide-react';
 import { edgeFn } from '@/lib/supabase/edge';
 
@@ -50,54 +51,53 @@ export default function RepHistory() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold flex items-center gap-2">
-          <History className="w-5 h-5" />
-          Call History
-        </h2>
-      </div>
+      <PageHeader
+        icon={<History />}
+        title="Call History"
+        description="Your recent inbound and outbound calls."
+      />
 
-      <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
+      <div className="bg-card rounded-xl shadow-sm border overflow-hidden">
         <table className="w-full text-sm">
-          <thead className="bg-gray-50 border-b">
+          <thead className="bg-muted/40 border-b">
             <tr>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">Date</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">Customer</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">Category</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">Duration</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">Minutes</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">Outcome</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">Status</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">Action</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">Date</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">Customer</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">Category</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">Duration</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">Minutes</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">Outcome</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">Status</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">Action</th>
             </tr>
           </thead>
           <tbody className="divide-y">
             {calls.map((call) => (
-              <tr key={call.id} className="hover:bg-gray-50 transition">
-                <td className="px-4 py-3 text-gray-700">
+              <tr key={call.id} className="hover:bg-muted/50 transition">
+                <td className="px-4 py-3 text-foreground">
                   {formatDateTime(call.started_at)}
                 </td>
                 <td className="px-4 py-3">
                   {call.customer ? (
                     <div>
                       <div className="font-medium">{call.customer.full_name}</div>
-                      <div className="text-xs text-gray-500">
+                      <div className="text-xs text-muted-foreground">
                         {formatPhone(call.customer.primary_phone)}
                       </div>
                     </div>
                   ) : (
-                    <span className="text-gray-400">Unknown</span>
+                    <span className="text-muted-foreground/80">Unknown</span>
                   )}
                 </td>
-                <td className="px-4 py-3 text-gray-600">
+                <td className="px-4 py-3 text-muted-foreground">
                   {call.task_category?.name || '—'}
                 </td>
-                <td className="px-4 py-3 font-mono text-gray-700">
+                <td className="px-4 py-3 font-mono text-foreground">
                   {call.total_duration_seconds
                     ? formatDuration(call.total_duration_seconds)
                     : '—'}
                 </td>
-                <td className="px-4 py-3 text-gray-700">
+                <td className="px-4 py-3 text-foreground">
                   {call.minutes_deducted || 0} min
                 </td>
                 <td className="px-4 py-3">
@@ -105,10 +105,10 @@ export default function RepHistory() {
                     <span
                       className={`px-2 py-0.5 rounded text-xs font-medium ${
                         call.outcome_status === 'resolved'
-                          ? 'bg-green-100 text-green-800'
+                          ? 'bg-success/15 text-success'
                           : call.outcome_status === 'partial'
-                          ? 'bg-yellow-100 text-yellow-800'
-                          : 'bg-red-100 text-red-800'
+                          ? 'bg-warning/15 text-warning'
+                          : 'bg-destructive/15 text-destructive'
                       }`}
                     >
                       {call.outcome_status}
@@ -119,7 +119,7 @@ export default function RepHistory() {
                 </td>
                 <td className="px-4 py-3">
                   {call.flag_status === 'flagged' && (
-                    <span className="px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">
+                    <span className="px-2 py-0.5 rounded text-xs font-medium bg-destructive/15 text-destructive">
                       Flagged
                     </span>
                   )}
@@ -128,21 +128,21 @@ export default function RepHistory() {
                   {call.customer?.primary_phone ? (
                     <button
                       onClick={() => router.push(`/rep?dial=${encodeURIComponent(call.customer!.primary_phone)}`)}
-                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-green-600 text-white text-xs font-medium hover:bg-green-700 transition"
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-success text-white text-xs font-medium hover:bg-success/90 transition"
                       title={`Call back ${formatPhone(call.customer.primary_phone)}`}
                     >
                       <PhoneCall className="w-3.5 h-3.5" />
                       Call Back
                     </button>
                   ) : (
-                    <span className="text-gray-400 text-xs">—</span>
+                    <span className="text-muted-foreground/80 text-xs">—</span>
                   )}
                 </td>
               </tr>
             ))}
             {calls.length === 0 && !loading && (
               <tr>
-                <td colSpan={8} className="px-4 py-12 text-center text-gray-500">
+                <td colSpan={8} className="px-4 py-12 text-center text-muted-foreground">
                   No call history found.
                 </td>
               </tr>
@@ -152,22 +152,22 @@ export default function RepHistory() {
 
         {/* Pagination */}
         {totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t bg-gray-50">
-            <span className="text-sm text-gray-600">
+          <div className="flex items-center justify-between px-4 py-3 border-t bg-muted/40">
+            <span className="text-sm text-muted-foreground">
               Page {page} of {totalPages} ({total} total)
             </span>
             <div className="flex gap-2">
               <button
                 onClick={() => setPage(Math.max(1, page - 1))}
                 disabled={page === 1}
-                className="p-2 rounded-lg border bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="p-2 rounded-lg border bg-card hover:bg-muted/50 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
               <button
                 onClick={() => setPage(Math.min(totalPages, page + 1))}
                 disabled={page === totalPages}
-                className="p-2 rounded-lg border bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="p-2 rounded-lg border bg-card hover:bg-muted/50 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ChevronRight className="w-4 h-4" />
               </button>

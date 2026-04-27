@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useCallback, useEffect, useState } from 'react';
 import { Lock, Unlock, Loader2, AlertCircle } from 'lucide-react';
@@ -76,7 +76,7 @@ export default function BrowserLockBadge({
 
   if (loading) {
     return (
-      <span className="inline-flex items-center gap-1 text-[11px] text-gray-400">
+      <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/80">
         <Loader2 className="w-3 h-3 animate-spin" /> sync status…
       </span>
     );
@@ -90,20 +90,20 @@ export default function BrowserLockBadge({
   return (
     <div className="inline-flex items-center gap-2 flex-wrap">
       {isLocked ? (
-        <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-medium">
+        <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-warning/15 text-warning font-medium">
           <Lock className="w-3 h-3" />
           In use
           {holderName ? ` by ${holderName}` : lock?.holder_rep_id ? ' by rep' : ''}
           {lock?.holder_pc_hostname ? ` (${lock.holder_pc_hostname})` : ''}
         </span>
       ) : (
-        <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-green-50 text-green-700">
+        <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-success/10 text-success">
           <Unlock className="w-3 h-3" />
           Available
         </span>
       )}
       {blob?.last_uploaded_at && (
-        <span className="text-[11px] text-gray-400">
+        <span className="text-[11px] text-muted-foreground/80">
           last sync {new Date(blob.last_uploaded_at).toLocaleString()}
         </span>
       )}
@@ -111,7 +111,7 @@ export default function BrowserLockBadge({
         <button
           onClick={() => void forceUnlock()}
           disabled={unlocking}
-          className="text-[10px] px-1.5 py-0.5 rounded border border-red-300 text-red-700 hover:bg-red-50 inline-flex items-center gap-1 disabled:opacity-50"
+          className="text-[10px] px-1.5 py-0.5 rounded border border-destructive/40 text-destructive hover:bg-destructive/10 inline-flex items-center gap-1 disabled:opacity-50"
           title="Force the lock open"
         >
           {unlocking ? <Loader2 className="w-3 h-3 animate-spin" /> : <AlertCircle className="w-3 h-3" />}

@@ -1,11 +1,11 @@
 {
-  "name": "Assistance Platform",
-  "short_name": "Assistance",
-  "description": "Live phone assistance platform",
+  "name": "Offline",
+  "short_name": "Offline",
+  "description": "Offline — live customer assistance, focused.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#1e40af",
+  "background_color": "#0b1220",
+  "theme_color": "#1e3a8a",
   "orientation": "portrait-primary",
   "icons": [
     {

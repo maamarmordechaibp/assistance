@@ -1,9 +1,11 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Loader2, Trash2, Archive, Play, Mail, MailOpen, RefreshCw } from 'lucide-react';
+import { Loader2, Trash2, Archive, Play, Mail, MailOpen, RefreshCw, Voicemail } from 'lucide-react';
 import { edgeFn } from '@/lib/supabase/edge';
+import { PageHeader } from '@/components/ui/page';
+import { Button } from '@/components/ui/button';
 
 interface Voicemail {
   id: string;
@@ -103,29 +105,30 @@ export default function VoicemailsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Voicemails</h1>
-        <div className="flex items-center gap-3">
-          <label className="text-sm flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={includeArchived}
-              onChange={(e) => setIncludeArchived(e.target.checked)}
-            />
-            Show archived
-          </label>
-          <button
-            type="button"
-            onClick={() => fetchVoicemails()}
-            className="flex items-center gap-1 px-3 py-1.5 text-sm border rounded hover:bg-gray-50"
-          >
-            <RefreshCw className="w-4 h-4" /> Refresh
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        icon={<Voicemail />}
+        title="Voicemails"
+        description="Inbound voicemail messages awaiting follow-up."
+        actions={
+          <>
+            <label className="text-sm flex items-center gap-2 text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={includeArchived}
+                onChange={(e) => setIncludeArchived(e.target.checked)}
+                className="size-4 rounded border-border"
+              />
+              Show archived
+            </label>
+            <Button variant="outline" size="sm" onClick={() => fetchVoicemails()}>
+              <RefreshCw /> Refresh
+            </Button>
+          </>
+        }
+      />
 
       {audioUrl && (
-        <div className="bg-white border rounded p-3 sticky top-2 z-10 shadow-sm">
+        <div className="bg-card border rounded p-3 sticky top-2 z-10 shadow-sm">
           <audio controls autoPlay src={audioUrl} className="w-full" />
         </div>
       )}
@@ -133,13 +136,13 @@ export default function VoicemailsPage() {
       {loading ? (
         <div className="flex justify-center py-10"><Loader2 className="w-6 h-6 animate-spin" /></div>
       ) : voicemails.length === 0 ? (
-        <div className="bg-white rounded border p-10 text-center text-gray-500">
+        <div className="bg-card rounded border p-10 text-center text-muted-foreground">
           No voicemails yet. Messages left on the Yiddish admin office line will appear here.
         </div>
       ) : (
-        <div className="bg-white rounded border overflow-hidden">
+        <div className="bg-card rounded border overflow-hidden">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-left">
+            <thead className="bg-muted/40 text-left">
               <tr>
                 <th className="p-3 w-10"></th>
                 <th className="p-3">Caller</th>
@@ -157,21 +160,21 @@ export default function VoicemailsPage() {
                   <tr key={vm.id} className={unread ? 'border-t font-semibold' : 'border-t'}>
                     <td className="p-3">
                       <button onClick={() => togglePlayed(vm)} title={unread ? 'Mark as read' : 'Mark as unread'}>
-                        {unread ? <Mail className="w-4 h-4 text-blue-600" /> : <MailOpen className="w-4 h-4 text-gray-400" />}
+                        {unread ? <Mail className="w-4 h-4 text-accent" /> : <MailOpen className="w-4 h-4 text-muted-foreground/80" />}
                       </button>
                     </td>
                     <td className="p-3">
                       <div>{vm.customers?.full_name || 'Unknown'}</div>
-                      <div className="text-xs text-gray-500 font-normal">{vm.caller_phone || '—'}</div>
+                      <div className="text-xs text-muted-foreground font-normal">{vm.caller_phone || '—'}</div>
                     </td>
                     <td className="p-3 capitalize">{vm.mailbox}</td>
                     <td className="p-3 font-normal">{new Date(vm.created_at).toLocaleString()}</td>
                     <td className="p-3 font-normal">{fmtDuration(vm.duration_seconds)}</td>
-                    <td className="p-3 max-w-md font-normal text-gray-700">
+                    <td className="p-3 max-w-md font-normal text-foreground">
                       {vm.transcript_text ? (
                         <div className="line-clamp-3 text-xs whitespace-pre-wrap">{vm.transcript_text}</div>
                       ) : (
-                        <span className="text-xs text-gray-400 italic">Transcribing…</span>
+                        <span className="text-xs text-muted-foreground/80 italic">Transcribing…</span>
                       )}
                     </td>
                     <td className="p-3">
@@ -179,21 +182,21 @@ export default function VoicemailsPage() {
                         <button
                           onClick={() => play(vm)}
                           disabled={!vm.recording_storage_path}
-                          className="p-1.5 rounded hover:bg-blue-50 text-blue-600 disabled:opacity-40"
+                          className="p-1.5 rounded hover:bg-accent/10 text-accent disabled:opacity-40"
                           title="Play"
                         >
                           <Play className="w-4 h-4" />
                         </button>
                         <button
                           onClick={() => archive(vm)}
-                          className="p-1.5 rounded hover:bg-gray-100 text-gray-600"
+                          className="p-1.5 rounded hover:bg-muted text-muted-foreground"
                           title={vm.archived_at ? 'Restore' : 'Archive'}
                         >
                           <Archive className="w-4 h-4" />
                         </button>
                         <button
                           onClick={() => remove(vm)}
-                          className="p-1.5 rounded hover:bg-red-50 text-red-600"
+                          className="p-1.5 rounded hover:bg-destructive/10 text-destructive"
                           title="Delete"
                         >
                           <Trash2 className="w-4 h-4" />

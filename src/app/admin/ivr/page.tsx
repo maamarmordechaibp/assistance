@@ -1,9 +1,13 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Loader2, Save, MessageSquare, RefreshCw } from 'lucide-react';
 import { edgeFn } from '@/lib/supabase/edge';
+import { PageHeader, EmptyState } from '@/components/ui/page';
+import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/input';
 
 interface Prompt {
   key: string;
@@ -56,66 +60,61 @@ export default function IvrEditorPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <MessageSquare className="w-5 h-5" /> IVR Editor
-        </h1>
-        <button
-          type="button"
-          onClick={load}
-          className="flex items-center gap-1 px-3 py-1.5 text-sm border rounded hover:bg-gray-50"
-        >
-          <RefreshCw className="w-4 h-4" /> Refresh
-        </button>
-      </div>
-
-      <p className="text-sm text-gray-600">
-        Edit the wording and button order callers hear. Use one line per
-        sentence/option — newlines are spoken as natural pauses. Variables
-        like <code className="bg-gray-100 px-1 rounded">{'{full_name}'}</code> are
-        substituted at call time. Changes propagate within ~1 minute.
-      </p>
+      <PageHeader
+        icon={<MessageSquare />}
+        title="IVR Editor"
+        description="Edit the wording and button order callers hear. Newlines render as natural pauses. Variables like {full_name} are substituted at call time. Changes propagate within ~1 minute."
+        actions={
+          <Button variant="outline" size="sm" onClick={load}>
+            <RefreshCw /> Refresh
+          </Button>
+        }
+      />
 
       {loading ? (
         <div className="flex justify-center py-10">
-          <Loader2 className="w-6 h-6 animate-spin" />
+          <Loader2 className="size-6 animate-spin text-muted-foreground" />
         </div>
       ) : prompts.length === 0 ? (
-        <div className="bg-white rounded border p-10 text-center text-gray-500">
-          No prompts in the database yet. Run the <code>20260426_ivr_prompts.sql</code> migration to seed defaults.
-        </div>
+        <EmptyState
+          icon={<MessageSquare />}
+          title="No prompts yet"
+          description={<span>Run the <code>20260426_ivr_prompts.sql</code> migration to seed defaults.</span>}
+        />
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-3">
           {prompts.map((p) => (
-            <div key={p.key} className="bg-white rounded border p-4">
-              <div className="flex items-baseline justify-between mb-2">
-                <div>
-                  <code className="font-semibold text-blue-700">{p.key}</code>
+            <Card key={p.key} className="p-4">
+              <div className="flex items-baseline justify-between mb-2 gap-2">
+                <div className="min-w-0">
+                  <code className="font-semibold text-accent">{p.key}</code>
                   {p.description && (
-                    <div className="text-xs text-gray-500 mt-0.5">{p.description}</div>
+                    <div className="text-xs text-muted-foreground mt-0.5">{p.description}</div>
                   )}
                 </div>
-                <div className="text-xs text-gray-400">
+                <div className="text-xs text-muted-foreground/80 shrink-0">
                   Updated {new Date(p.updated_at).toLocaleString()}
                 </div>
               </div>
-              <textarea
+              <Textarea
                 rows={Math.max(3, (drafts[p.key] || '').split('\n').length + 1)}
                 value={drafts[p.key] ?? ''}
                 onChange={(e) => setDrafts((d) => ({ ...d, [p.key]: e.target.value }))}
-                className="w-full font-mono text-sm border rounded p-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="font-mono"
               />
               <div className="flex justify-end mt-2">
-                <button
+                <Button
+                  variant="accent"
+                  size="sm"
                   onClick={() => save(p)}
                   disabled={saving === p.key || (drafts[p.key] ?? '') === p.text}
-                  className="flex items-center gap-2 px-4 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 text-sm"
+                  loading={saving === p.key}
                 >
-                  {saving === p.key ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {saving !== p.key && <Save />}
                   Save
-                </button>
+                </Button>
               </div>
-            </div>
+            </Card>
           ))}
         </div>
       )}

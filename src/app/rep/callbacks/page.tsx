@@ -1,9 +1,13 @@
-'use client';
+﻿'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { formatPhone, formatDateTime } from '@/lib/utils';
 import { toast } from 'sonner';
-import { PhoneCall, PhoneOutgoing, Check, Clock, Loader2, RefreshCw } from 'lucide-react';
+import { PageHeader } from '@/components/ui/page';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { PhoneCall, PhoneOutgoing, X, Clock, Loader2, RefreshCw } from 'lucide-react';
 import { edgeFn } from '@/lib/supabase/edge';
 
 interface Callback {
@@ -19,11 +23,10 @@ interface Callback {
 }
 
 export default function RepCallbacks() {
+  const router = useRouter();
   const [callbacks, setCallbacks] = useState<Callback[]>([]);
   const [loading, setLoading] = useState(true);
   const [callingId, setCallingId] = useState<string | null>(null);
-  // makeCall is set by the parent portal page via the softphone onReady callback
-  const makeCallRef = useRef<((to: string) => Promise<void>) | null>(null);
 
   const fetchCallbacks = useCallback(async (retryCount = 0) => {
     setLoading(true);
@@ -45,19 +48,22 @@ export default function RepCallbacks() {
 
   useEffect(() => {
     fetchCallbacks();
-    // Expose makeCallRef setter so the parent softphone can wire it in
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).__repCallbacksMakeCallRef = makeCallRef;
   }, [fetchCallbacks]);
 
-  const markComplete = async (id: string) => {
+  const dismissCallback = async (id: string) => {
+    // Require explicit confirmation — dismissing a callback means the
+    // customer will NOT be called, so the rep should never hit this by
+    // accident.
+    if (!window.confirm('Dismiss this callback without calling the customer? This cannot be undone.')) {
+      return;
+    }
     const res = await edgeFn('callbacks', {
       method: 'PATCH',
-      body: JSON.stringify({ id, status: 'called_back' }),
+      body: JSON.stringify({ id, status: 'called_back', notes: 'Dismissed by rep without callback' }),
     });
     if (res.ok) {
       setCallbacks(prev => prev.filter((c) => c.id !== id));
-      toast.success('Callback marked complete');
+      toast.success('Callback dismissed');
     } else {
       toast.error('Failed to update callback');
     }
@@ -66,26 +72,25 @@ export default function RepCallbacks() {
   const initiateCallback = async (cb: Callback) => {
     setCallingId(cb.id);
     try {
-      // If the softphone is connected, use it directly for a browser-to-PSTN call
-      if (makeCallRef.current) {
-        await makeCallRef.current(cb.phone_number);
-        // Optimistically mark as calling
-        setCallbacks(prev => prev.map(c => c.id === cb.id ? { ...c, status: 'calling' } : c));
-        toast.success(`Calling ${formatPhone(cb.phone_number)}...`);
-      } else {
-        // Fallback: trigger outbound call via REST API (SignalWire calls the customer)
-        const res = await edgeFn('callbacks', {
-          method: 'POST',
-          body: JSON.stringify({ id: cb.id }),
+      // Mark the callback as 'called_back' immediately — the rep is
+      // taking ownership; if the call doesn't connect, they can manually
+      // re-create the request from history. This also drops it from the
+      // list so it isn't double-clicked.
+      try {
+        await edgeFn('callbacks', {
+          method: 'PATCH',
+          body: JSON.stringify({ id: cb.id, status: 'called_back' }),
         });
-        if (res.ok) {
-          setCallbacks(prev => prev.map(c => c.id === cb.id ? { ...c, status: 'calling' } : c));
-          toast.success(`Calling ${formatPhone(cb.phone_number)} — answer your phone or browser to connect.`);
-        } else {
-          const err = await res.json();
-          toast.error('Failed to initiate call: ' + (err.error || 'Unknown error'));
-        }
-      }
+      } catch { /* non-fatal */ }
+
+      // Navigate to the main rep dashboard with `dial` (auto-dials via
+      // softphone) and `customerId` (auto-loads the customer profile so
+      // the rep sees full context the moment the call connects).
+      const params = new URLSearchParams({ dial: cb.phone_number });
+      if (cb.customer?.id) params.set('customerId', cb.customer.id);
+      params.set('callbackId', cb.id);
+      toast.success(`Calling ${formatPhone(cb.phone_number)}…`);
+      router.push(`/rep?${params.toString()}`);
     } catch (err) {
       toast.error('Failed to call: ' + (err instanceof Error ? err.message : String(err)));
     } finally {
@@ -100,23 +105,23 @@ export default function RepCallbacks() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+        <Loader2 className="w-8 h-8 animate-spin text-accent" />
       </div>
     );
   }
 
   const CallbackCard = ({ cb }: { cb: Callback }) => (
-    <div className="bg-white rounded-xl shadow-sm border p-4 flex items-center justify-between gap-4">
+    <div className="bg-card rounded-xl shadow-sm border p-4 flex items-center justify-between gap-4">
       <div className="flex items-center gap-4 min-w-0">
-        <div className="w-10 h-10 bg-blue-100 rounded-full flex-shrink-0 flex items-center justify-center">
-          <PhoneCall className="w-5 h-5 text-blue-600" />
+        <div className="w-10 h-10 bg-accent/15 rounded-full flex-shrink-0 flex items-center justify-center">
+          <PhoneCall className="w-5 h-5 text-accent" />
         </div>
         <div className="min-w-0">
           <div className="font-medium truncate">
             {cb.customer?.full_name || cb.caller_name || 'Unknown Caller'}
           </div>
-          <div className="text-sm text-gray-500">{formatPhone(cb.phone_number)}</div>
-          <div className="flex items-center gap-1 text-xs text-gray-400 mt-0.5">
+          <div className="text-sm text-muted-foreground">{formatPhone(cb.phone_number)}</div>
+          <div className="flex items-center gap-1 text-xs text-muted-foreground/80 mt-0.5">
             <Clock className="w-3 h-3" />
             {formatDateTime(cb.requested_at)}
           </div>
@@ -126,7 +131,7 @@ export default function RepCallbacks() {
         <button
           onClick={() => initiateCallback(cb)}
           disabled={callingId === cb.id || cb.status === 'calling'}
-          className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition"
+          className="flex items-center gap-2 bg-accent text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-accent/90 disabled:opacity-50 transition"
         >
           {callingId === cb.id ? (
             <Loader2 className="w-4 h-4 animate-spin" />
@@ -136,12 +141,11 @@ export default function RepCallbacks() {
           {cb.status === 'calling' ? 'Calling...' : 'Call Back'}
         </button>
         <button
-          onClick={() => markComplete(cb.id)}
-          className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 transition"
-          title="Mark as handled (no call needed)"
+          onClick={() => dismissCallback(cb.id)}
+          className="p-2 text-muted-foreground/80 hover:text-destructive hover:bg-destructive/10 rounded-lg transition"
+          title="Dismiss without calling (requires confirmation)"
         >
-          <Check className="w-4 h-4" />
-          Done
+          <X className="w-4 h-4" />
         </button>
       </div>
     </div>
@@ -149,28 +153,27 @@ export default function RepCallbacks() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold flex items-center gap-2">
-          <PhoneCall className="w-5 h-5" />
-          Pending Callbacks
-          {pendingCallbacks.length > 0 && (
-            <span className="ml-1 bg-red-100 text-red-700 text-xs font-bold px-2 py-0.5 rounded-full">
-              {pendingCallbacks.length}
-            </span>
-          )}
-        </h2>
-        <button
-          onClick={() => fetchCallbacks()}
-          className="flex items-center gap-1 px-4 py-2 bg-gray-100 rounded-lg text-sm font-medium hover:bg-gray-200 transition"
-        >
-          <RefreshCw className="w-4 h-4" />
-          Refresh
-        </button>
-      </div>
+      <PageHeader
+        icon={<PhoneCall />}
+        title={
+          <span className="flex items-center gap-2">
+            Pending Callbacks
+            {pendingCallbacks.length > 0 && (
+              <Badge variant="destructive">{pendingCallbacks.length}</Badge>
+            )}
+          </span>
+        }
+        description="Customers waiting for a return call."
+        actions={
+          <Button variant="outline" size="sm" onClick={() => fetchCallbacks()}>
+            <RefreshCw /> Refresh
+          </Button>
+        }
+      />
 
       {pendingCallbacks.length === 0 ? (
-        <div className="bg-white rounded-xl shadow-sm border p-12 text-center text-gray-500">
-          <PhoneCall className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+        <div className="bg-card rounded-xl shadow-sm border p-12 text-center text-muted-foreground">
+          <PhoneCall className="w-12 h-12 mx-auto mb-3 text-muted-foreground/60" />
           <p className="text-lg font-medium">No pending callbacks</p>
           <p className="text-sm">All callback requests have been handled.</p>
         </div>
@@ -178,7 +181,7 @@ export default function RepCallbacks() {
         <div className="space-y-6">
           {myCallbacks.length > 0 && (
             <div>
-              <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
                 Requested for You ({myCallbacks.length})
               </h3>
               <div className="space-y-3">
@@ -188,7 +191,7 @@ export default function RepCallbacks() {
           )}
           {generalCallbacks.length > 0 && (
             <div>
-              <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
                 General Queue ({generalCallbacks.length})
               </h3>
               <div className="space-y-3">

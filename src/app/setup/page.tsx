@@ -2,8 +2,12 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Shield, Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { edgeFn } from '@/lib/supabase/edge';
+import { AuthShell } from '@/components/layout/auth-shell';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 
 export default function SetupPage() {
   const [email, setEmail] = useState('');
@@ -43,100 +47,90 @@ export default function SetupPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="w-full max-w-md">
-        <div className="bg-white shadow-lg rounded-2xl p-8">
-          <div className="text-center mb-8">
-            <div className="w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Shield className="w-8 h-8 text-purple-600" />
-            </div>
-            <h1 className="text-2xl font-bold text-gray-900">First-Time Setup</h1>
-            <p className="text-gray-500 mt-2">Create the first admin account</p>
+    <AuthShell
+      headline="Welcome to Offline."
+      subhead="Create your first admin account to get started. You'll be able to invite teammates from the dashboard."
+    >
+      <div className="space-y-1.5">
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">First-time setup</h1>
+        <p className="text-sm text-muted-foreground">Create the initial admin account.</p>
+      </div>
+
+      {success ? (
+        <div className="mt-8 flex flex-col items-center gap-3 rounded-lg border border-success/30 bg-success/10 px-4 py-8 text-center">
+          <CheckCircle2 className="size-10 text-success" />
+          <div className="text-sm font-medium text-foreground">Admin account created</div>
+          <div className="text-xs text-muted-foreground">Redirecting to sign in…</div>
+        </div>
+      ) : (
+        <form onSubmit={handleSetup} className="mt-8 space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="fullName">Full name</Label>
+            <Input
+              id="fullName"
+              required
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              placeholder="Admin Name"
+              autoComplete="name"
+            />
           </div>
 
-          {success ? (
-            <div className="bg-green-50 text-green-700 px-4 py-6 rounded-lg text-center">
-              <p className="font-semibold">Admin account created!</p>
-              <p className="text-sm mt-1">Redirecting to login...</p>
-            </div>
-          ) : (
-            <form onSubmit={handleSetup} className="space-y-5">
-              <div>
-                <label htmlFor="fullName" className="block text-sm font-medium text-gray-700 mb-1">
-                  Full Name
-                </label>
-                <input
-                  id="fullName"
-                  type="text"
-                  required
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition"
-                  placeholder="Admin Name"
-                />
-              </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="email">Work email</Label>
+            <Input
+              id="email"
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="admin@company.com"
+              autoComplete="email"
+            />
+          </div>
 
-              <div>
-                <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
-                  Email
-                </label>
-                <input
-                  id="email"
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition"
-                  placeholder="admin@company.com"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
-                  Password
-                </label>
-                <div className="relative">
-                  <input
-                    id="password"
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    minLength={6}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full px-4 py-2.5 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition"
-                    placeholder="Min 6 characters"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                  >
-                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-              </div>
-
-              {error && (
-                <div className="bg-red-50 text-red-700 px-4 py-3 rounded-lg text-sm">
-                  {error}
-                </div>
-              )}
-
+          <div className="space-y-1.5">
+            <Label htmlFor="password">Password</Label>
+            <div className="relative">
+              <Input
+                id="password"
+                type={showPassword ? 'text' : 'password'}
+                required
+                minLength={6}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="At least 6 characters"
+                autoComplete="new-password"
+                className="pr-10"
+              />
               <button
-                type="submit"
-                disabled={loading}
-                className="w-full bg-purple-600 text-white py-2.5 rounded-lg font-medium hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                type="button"
+                onClick={() => setShowPassword((s) => !s)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                tabIndex={-1}
               >
-                {loading ? 'Creating...' : 'Create Admin Account'}
+                {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
               </button>
-            </form>
-          )}
+            </div>
+          </div>
 
-          <p className="text-center text-xs text-gray-400 mt-6">
-            This page only works once. After the first admin is created, use the admin panel to add more users.
-          </p>
-        </div>
-      </div>
-    </div>
+          {error ? (
+            <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <AlertCircle className="mt-0.5 size-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          ) : null}
+
+          <Button type="submit" loading={loading} size="lg" className="w-full">
+            {loading ? 'Creating…' : 'Create admin account'}
+          </Button>
+        </form>
+      )}
+
+      <p className="mt-8 text-center text-xs text-muted-foreground">
+        This page only works once. After the first admin is created, add new users from the admin panel.
+      </p>
+    </AuthShell>
   );
 }

@@ -1,10 +1,12 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { formatPhone, formatDuration, formatDateTime } from '@/lib/utils';
 import Link from 'next/link';
 import { toast } from 'sonner';
+import { PageHeader } from '@/components/ui/page';
+import { Button } from '@/components/ui/button';
 import {
   FileText,
   Search,
@@ -87,40 +89,42 @@ export default function AdminCalls() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold flex items-center gap-2">
-          <FileText className="w-5 h-5" />
-          Call Review
-        </h2>
-        <div className="flex gap-2">
-          <button
-            onClick={() => { setFilter(''); setPage(1); }}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium ${!filter ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-          >
-            All
-          </button>
-          <button
-            onClick={() => { setFilter('flagged'); setPage(1); }}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1 ${filter === 'flagged' ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-          >
-            <AlertTriangle className="w-3 h-3" />
-            Flagged
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        icon={<FileText />}
+        title="Call Review"
+        description="Recent calls with AI analysis, transcripts, and findings."
+        actions={
+          <div className="flex gap-1">
+            <Button
+              variant={!filter ? 'accent' : 'outline'}
+              size="sm"
+              onClick={() => { setFilter(''); setPage(1); }}
+            >
+              All
+            </Button>
+            <Button
+              variant={filter === 'flagged' ? 'destructive' : 'outline'}
+              size="sm"
+              onClick={() => { setFilter('flagged'); setPage(1); }}
+            >
+              <AlertTriangle /> Flagged
+            </Button>
+          </div>
+        }
+      />
 
-      <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
+      <div className="bg-card rounded-xl shadow-sm border overflow-hidden">
         <table className="w-full text-sm">
-          <thead className="bg-gray-50 border-b">
+          <thead className="bg-muted/40 border-b">
             <tr>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">Date</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">Customer</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">Rep</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">Category</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">Duration</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">Ext.</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">AI</th>
-              <th className="text-left px-4 py-3 font-medium text-gray-600">Flag</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">Date</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">Customer</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">Rep</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">Category</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">Duration</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">Ext.</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">AI</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground">Flag</th>
               <th className="px-4 py-3"></th>
             </tr>
           </thead>
@@ -128,17 +132,17 @@ export default function AdminCalls() {
             {calls.map((call) => {
               const analysis = call.analysis?.[0];
               return (
-                <tr key={call.id} className="hover:bg-gray-50 transition">
-                  <td className="px-4 py-3 text-xs text-gray-700">
+                <tr key={call.id} className="hover:bg-muted/50 transition">
+                  <td className="px-4 py-3 text-xs text-foreground">
                     {formatDateTime(call.started_at)}
                   </td>
                   <td className="px-4 py-3 font-medium">
                     {call.customer?.full_name || 'Unknown'}
                   </td>
-                  <td className="px-4 py-3 text-gray-600">
+                  <td className="px-4 py-3 text-muted-foreground">
                     {call.rep?.full_name || '—'}
                   </td>
-                  <td className="px-4 py-3 text-gray-600">
+                  <td className="px-4 py-3 text-muted-foreground">
                     {call.task_category?.name || '—'}
                   </td>
                   <td className="px-4 py-3 font-mono">
@@ -146,17 +150,17 @@ export default function AdminCalls() {
                   </td>
                   <td className="px-4 py-3 text-center">
                     {call.extensions_used > 0 ? (
-                      <span className="text-orange-600 font-medium">{call.extensions_used}</span>
+                      <span className="text-warning font-medium">{call.extensions_used}</span>
                     ) : '—'}
                   </td>
                   <td className="px-4 py-3">
                     {analysis?.ai_wasted_time_flag && (
-                      <span className="px-1.5 py-0.5 rounded text-xs bg-red-100 text-red-800">
+                      <span className="px-1.5 py-0.5 rounded text-xs bg-destructive/15 text-destructive">
                         Wasted
                       </span>
                     )}
                     {analysis && !analysis.ai_wasted_time_flag && (
-                      <span className="px-1.5 py-0.5 rounded text-xs bg-green-100 text-green-800">
+                      <span className="px-1.5 py-0.5 rounded text-xs bg-success/15 text-success">
                         OK
                       </span>
                     )}
@@ -164,18 +168,18 @@ export default function AdminCalls() {
                   <td className="px-4 py-3">
                     {call.flag_status === 'flagged' ? (
                       <div className="flex items-center gap-1">
-                        <AlertTriangle className="w-4 h-4 text-red-500" />
+                        <AlertTriangle className="w-4 h-4 text-destructive" />
                         <div className="flex gap-1">
                           <button
                             onClick={() => handleReview(call.id, 'reviewed')}
-                            className="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-800 hover:bg-green-200"
+                            className="text-xs px-1.5 py-0.5 rounded bg-success/15 text-success hover:bg-success/20"
                             title="Mark as reviewed"
                           >
                             ✓
                           </button>
                           <button
                             onClick={() => handleReview(call.id, 'dismissed')}
-                            className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 hover:bg-gray-200"
+                            className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground hover:bg-muted"
                             title="Dismiss flag"
                           >
                             ✕
@@ -183,23 +187,23 @@ export default function AdminCalls() {
                         </div>
                       </div>
                     ) : call.flag_status === 'reviewed' ? (
-                      <CheckCircle className="w-4 h-4 text-green-500" />
+                      <CheckCircle className="w-4 h-4 text-success" />
                     ) : null}
                   </td>
                   <td className="px-4 py-3">
                     <Link
                       href={`/admin/calls/${call.id}`}
-                      className="p-1.5 rounded hover:bg-gray-100 inline-flex"
+                      className="p-1.5 rounded hover:bg-muted inline-flex"
                     >
-                      <Eye className="w-4 h-4 text-gray-500" />
+                      <Eye className="w-4 h-4 text-muted-foreground" />
                     </Link>
                     {call.customer?.primary_phone && (
                       <button
                         onClick={() => router.push(`/rep?dial=${encodeURIComponent(call.customer!.primary_phone!)}`)}
-                        className="ml-1 p-1.5 rounded hover:bg-green-100 inline-flex"
+                        className="ml-1 p-1.5 rounded hover:bg-success/15 inline-flex"
                         title={`Call back ${formatPhone(call.customer.primary_phone)}`}
                       >
-                        <PhoneCall className="w-4 h-4 text-green-600" />
+                        <PhoneCall className="w-4 h-4 text-success" />
                       </button>
                     )}
                   </td>
@@ -208,7 +212,7 @@ export default function AdminCalls() {
             })}
             {calls.length === 0 && !loading && (
               <tr>
-                <td colSpan={9} className="px-4 py-12 text-center text-gray-500">
+                <td colSpan={9} className="px-4 py-12 text-center text-muted-foreground">
                   No calls found.
                 </td>
               </tr>
@@ -217,22 +221,22 @@ export default function AdminCalls() {
         </table>
 
         {totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t bg-gray-50">
-            <span className="text-sm text-gray-600">
+          <div className="flex items-center justify-between px-4 py-3 border-t bg-muted/40">
+            <span className="text-sm text-muted-foreground">
               Page {page} of {totalPages} ({total} total)
             </span>
             <div className="flex gap-2">
               <button
                 onClick={() => setPage(Math.max(1, page - 1))}
                 disabled={page === 1}
-                className="p-2 rounded-lg border bg-white hover:bg-gray-50 disabled:opacity-50"
+                className="p-2 rounded-lg border bg-card hover:bg-muted/50 disabled:opacity-50"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
               <button
                 onClick={() => setPage(Math.min(totalPages, page + 1))}
                 disabled={page === totalPages}
-                className="p-2 rounded-lg border bg-white hover:bg-gray-50 disabled:opacity-50"
+                className="p-2 rounded-lg border bg-card hover:bg-muted/50 disabled:opacity-50"
               >
                 <ChevronRight className="w-4 h-4" />
               </button>

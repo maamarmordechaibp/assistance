@@ -4,7 +4,7 @@ import { createServiceClient } from '../_shared/supabase.ts';
 import * as laml from '../_shared/laml.ts';
 import { formatMinuteAnnouncement } from '../_shared/utils.ts';
 import { enqueueCaller } from '../_shared/callQueue.ts';
-import { getSubscriberAddressPath } from '../_shared/signalwire.ts';
+import { getSubscriberAddressPath, toSwIdentity } from '../_shared/signalwire.ts';
 import { promptLines } from '../_shared/promptStore.ts';
 
 /**
@@ -200,14 +200,14 @@ serve(async (req) => {
     }
 
     // Look up how to reach the rep: prefer SIP URI (free), fall back to
-    // PSTN number, error if neither is configured.
+    // PSTN number, then to browser SDK via <Dial><Client>identity</Client></Dial>.
     const { data: rep } = await supabase
       .from('reps')
-      .select('id, full_name, phone_e164, sip_uri')
+      .select('id, full_name, email, phone_e164, sip_uri')
       .eq('id', repIdParam)
       .maybeSingle();
 
-    const dialXml = rep ? laml.dialRep(rep, {
+    let dialXml = rep ? laml.dialRep(rep, {
       callerId: Deno.env.get('SIGNALWIRE_FROM_NUMBER') || undefined,
       timeout: 30,
       timeLimit: 14400,
@@ -217,8 +217,27 @@ serve(async (req) => {
       action: `${baseUrl}/sw-inbound?step=claimed-rep-fallback`,
     }) : null;
 
+    // Browser-only rep (no phone_e164, no sip_uri): bridge via the rep's
+    // SignalWire Call Fabric subscriber identity. The rep's softphone is
+    // already connected via client.online(), so SignalWire delivers the
+    // INVITE over that websocket. (See softphone.tsx header comment.)
+    let bridgeKind: 'sip' | 'pstn' | 'browser' | 'none' = 'none';
+    if (rep?.sip_uri) bridgeKind = 'sip';
+    else if (rep?.phone_e164) bridgeKind = 'pstn';
+    if (!dialXml && rep?.email) {
+      const identity = toSwIdentity(rep.email);
+      dialXml = laml.dialClient(identity, {
+        callerId: Deno.env.get('SIGNALWIRE_FROM_NUMBER') || undefined,
+        timeout: 30,
+        timeLimit: 14400,
+        record: true,
+        action: `${baseUrl}/sw-inbound?step=claimed-rep-fallback`,
+      });
+      bridgeKind = 'browser';
+    }
+
     if (!dialXml) {
-      console.error(`[sw-inbound] connect-claimed-rep rep ${repIdParam} has no phone_e164 or sip_uri`);
+      console.error(`[sw-inbound] connect-claimed-rep rep ${repIdParam} has no phone_e164, sip_uri, or email`);
       const elements = [
         laml.say('Your representative does not have a phone number on file. Please contact support.'),
         laml.hangup(),
@@ -226,7 +245,7 @@ serve(async (req) => {
       return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
     }
 
-    console.log(`[sw-inbound] connect-claimed-rep rep=${repIdParam} target=${rep?.sip_uri ? 'sip' : 'pstn'}`);
+    console.log(`[sw-inbound] connect-claimed-rep rep=${repIdParam} bridge=${bridgeKind}`);
     const elements = [
       laml.say('Connecting you to your representative now. Please hold.'),
       dialXml,

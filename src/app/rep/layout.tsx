@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import Sidebar from '@/components/layout/sidebar';
+import { Topbar } from '@/components/layout/topbar';
 
 export default async function RepLayout({
   children,
@@ -18,11 +19,14 @@ export default async function RepLayout({
   const userName = user.email || 'User';
 
   return (
-    <div className="flex min-h-screen">
+    <div className="flex min-h-screen bg-background">
       <Sidebar role="rep" userName={userName} />
-      <main className="flex-1 bg-gray-50 overflow-auto">
-        <div className="p-6">{children}</div>
-      </main>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <Topbar role="rep" />
+        <main className="flex-1 overflow-auto">
+          <div className="mx-auto w-full max-w-[1600px] p-4 sm:p-6 lg:p-8">{children}</div>
+        </main>
+      </div>
     </div>
   );
 }

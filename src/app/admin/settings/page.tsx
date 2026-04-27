@@ -1,9 +1,10 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Settings, Save, Loader2, Upload, Trash2, Play } from 'lucide-react';
 import { edgeFn } from '@/lib/supabase/edge';
+import { PageHeader } from '@/components/ui/page';
 import { createClient } from '@/lib/supabase/client';
 
 interface Setting {
@@ -64,7 +65,7 @@ export default function AdminSettings() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+        <Loader2 className="w-8 h-8 animate-spin text-accent" />
       </div>
     );
   }
@@ -90,10 +91,11 @@ export default function AdminSettings() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-xl font-semibold flex items-center gap-2">
-        <Settings className="w-5 h-5" />
-        Settings
-      </h2>
+      <PageHeader
+        icon={<Settings />}
+        title="Settings"
+        description="System configuration and integration credentials."
+      />
 
       <HoldMusicUploader
         currentUrl={typeof settings.find(s => s.key === 'hold_music_url')?.value === 'string' ? settings.find(s => s.key === 'hold_music_url')!.value as string : ''}
@@ -104,7 +106,7 @@ export default function AdminSettings() {
       />
 
       {Object.entries(groups).map(([group, items]) => (
-        <div key={group} className="bg-white rounded-xl shadow-sm border">
+        <div key={group} className="bg-card rounded-xl shadow-sm border">
           <div className="px-6 py-4 border-b">
             <h3 className="font-semibold">{group}</h3>
           </div>
@@ -114,7 +116,7 @@ export default function AdminSettings() {
                 <div className="flex-1">
                   <div className="text-sm font-medium">{setting.key}</div>
                   {setting.description && (
-                    <div className="text-xs text-gray-500 mt-0.5">{setting.description}</div>
+                    <div className="text-xs text-muted-foreground mt-0.5">{setting.description}</div>
                   )}
                 </div>
                 <div className="flex items-center gap-2">
@@ -124,12 +126,12 @@ export default function AdminSettings() {
                     onChange={(e) =>
                       setEditValues({ ...editValues, [setting.key]: e.target.value })
                     }
-                    className="w-48 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-48 rounded-lg border border-border px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                   <button
                     onClick={() => handleSave(setting.key)}
                     disabled={saving === setting.key}
-                    className="p-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                    className="p-2 rounded-lg bg-accent text-white hover:bg-accent/90 disabled:opacity-50"
                   >
                     {saving === setting.key ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
@@ -192,27 +194,27 @@ function HoldMusicUploader({ currentUrl, onSaved }: { currentUrl: string; onSave
   }
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border">
+    <div className="bg-card rounded-xl shadow-sm border">
       <div className="px-6 py-4 border-b">
         <h3 className="font-semibold flex items-center gap-2">
           <Play className="w-4 h-4" /> Hold music
         </h3>
-        <p className="text-xs text-gray-500 mt-1">Upload an MP3/WAV that callers hear while waiting in queue.</p>
+        <p className="text-xs text-muted-foreground mt-1">Upload an MP3/WAV that callers hear while waiting in queue.</p>
       </div>
       <div className="px-6 py-4 space-y-3">
         {currentUrl ? (
-          <div className="flex items-center gap-3 p-3 bg-gray-50 rounded">
+          <div className="flex items-center gap-3 p-3 bg-muted/40 rounded">
             <audio controls src={currentUrl} className="flex-1 max-w-md" />
             <button
               onClick={clearMusic}
-              className="p-2 rounded hover:bg-red-50 text-red-600"
+              className="p-2 rounded hover:bg-destructive/10 text-destructive"
               title="Reset to default"
             >
               <Trash2 className="w-4 h-4" />
             </button>
           </div>
         ) : (
-          <div className="text-sm text-gray-500 italic">Using SignalWire default hold music.</div>
+          <div className="text-sm text-muted-foreground italic">Using SignalWire default hold music.</div>
         )}
         <div className="flex items-center gap-3">
           <input
@@ -224,7 +226,7 @@ function HoldMusicUploader({ currentUrl, onSaved }: { currentUrl: string; onSave
           <button
             onClick={handleUpload}
             disabled={!pendingFile || uploading}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 text-sm"
+            className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded hover:bg-accent/90 disabled:opacity-50 text-sm"
           >
             {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
             Upload

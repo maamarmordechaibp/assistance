@@ -173,14 +173,29 @@ serve(async (req) => {
       });
     }
 
-    const minutes = Math.ceil(durationSecs / 60);
+    // ── Billing-gate: only count time from `billable_started_at` (set when
+    //    the rep clicked "Confirm & Continue"), not from connected_at. If
+    //    the rep never confirmed, no minutes are billed — customer was
+    //    contacted, said they no longer need help, and was let go. ──
+    const { data: existing } = await supabase
+      .from('calls')
+      .select('connected_at, billable_started_at')
+      .eq('id', callId)
+      .maybeSingle();
+    const endedAtIso = new Date().toISOString();
+    let billableSecs = 0;
+    if (existing?.billable_started_at) {
+      const start = new Date(existing.billable_started_at).getTime();
+      billableSecs = Math.max(0, Math.round((Date.now() - start) / 1000));
+    }
+    const minutes = Math.ceil(billableSecs / 60);
 
     const { data: call, error: callErr } = await supabase
       .from('calls')
       .update({
-        ended_at: new Date().toISOString(),
+        ended_at: endedAtIso,
         total_duration_seconds: durationSecs,
-        billable_duration_seconds: durationSecs,
+        billable_duration_seconds: billableSecs,
         minutes_deducted: minutes,
       })
       .eq('id', callId)
@@ -194,7 +209,7 @@ serve(async (req) => {
       });
     }
 
-    // Deduct minutes from customer (if known and duration > 0)
+    // Deduct minutes from customer (if known and we billed > 0 minutes)
     if (call?.customer_id && minutes > 0) {
       await supabase.from('minute_ledger').insert({
         customer_id: call.customer_id,
@@ -221,6 +236,38 @@ serve(async (req) => {
     }
 
     return new Response(JSON.stringify({ success: true, minutes_deducted: minutes }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
+  // ── CONFIRM: rep clicked "Confirm & Continue" — start the billing timer ──
+  if (action === 'confirm') {
+    const callId = body?.call_id;
+    if (!callId) {
+      return new Response(JSON.stringify({ error: 'call_id required' }), {
+        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    const { data: existing } = await supabase
+      .from('calls')
+      .select('id, billable_started_at')
+      .eq('id', callId)
+      .maybeSingle();
+    if (!existing) {
+      return new Response(JSON.stringify({ error: 'Call not found' }), {
+        status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    // Idempotent: only stamp the first time so the meter doesn't reset on
+    // accidental re-clicks.
+    const billableStartedAt = existing.billable_started_at || new Date().toISOString();
+    if (!existing.billable_started_at) {
+      await supabase
+        .from('calls')
+        .update({ billable_started_at: billableStartedAt })
+        .eq('id', callId);
+    }
+    return new Response(JSON.stringify({ success: true, billable_started_at: billableStartedAt }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }

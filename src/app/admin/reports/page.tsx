@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { PageHeader } from '@/components/ui/page';
+import { Button } from '@/components/ui/button';
 import { formatMinutes, formatDuration, formatCurrency } from '@/lib/utils';
 import { BarChart3, Loader2, Calendar } from 'lucide-react';
 
@@ -104,83 +106,83 @@ export default function AdminReports() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+        <Loader2 className="w-8 h-8 animate-spin text-accent" />
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold flex items-center gap-2">
-          <BarChart3 className="w-5 h-5" />
-          Reports
-        </h2>
-        <div className="flex gap-2">
-          {[7, 14, 30, 90].map((d) => (
-            <button
-              key={d}
-              onClick={() => setDays(d)}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium ${
-                days === d ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              {d}d
-            </button>
-          ))}
-        </div>
-      </div>
+      <PageHeader
+        icon={<BarChart3 />}
+        title="Reports"
+        description="Performance metrics and trends across reps and calls."
+        actions={
+          <div className="flex gap-1">
+            {[7, 14, 30, 90].map((d) => (
+              <Button
+                key={d}
+                variant={days === d ? 'accent' : 'outline'}
+                size="sm"
+                onClick={() => setDays(d)}
+              >
+                {d}d
+              </Button>
+            ))}
+          </div>
+        }
+      />
 
       {report && (
         <>
           {/* Summary Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="bg-white rounded-xl shadow-sm border p-5">
-              <div className="text-sm text-gray-500">Total Calls</div>
+            <div className="bg-card rounded-xl shadow-sm border p-5">
+              <div className="text-sm text-muted-foreground">Total Calls</div>
               <div className="text-2xl font-bold mt-1">{report.totalCalls}</div>
             </div>
-            <div className="bg-white rounded-xl shadow-sm border p-5">
-              <div className="text-sm text-gray-500">Minutes Billed</div>
+            <div className="bg-card rounded-xl shadow-sm border p-5">
+              <div className="text-sm text-muted-foreground">Minutes Billed</div>
               <div className="text-2xl font-bold mt-1">{formatMinutes(report.totalMinutesBilled)}</div>
             </div>
-            <div className="bg-white rounded-xl shadow-sm border p-5">
-              <div className="text-sm text-gray-500">Revenue</div>
-              <div className="text-2xl font-bold mt-1 text-green-600">{formatCurrency(report.totalRevenue)}</div>
+            <div className="bg-card rounded-xl shadow-sm border p-5">
+              <div className="text-sm text-muted-foreground">Revenue</div>
+              <div className="text-2xl font-bold mt-1 text-success">{formatCurrency(report.totalRevenue)}</div>
             </div>
-            <div className="bg-white rounded-xl shadow-sm border p-5">
-              <div className="text-sm text-gray-500">Avg Duration</div>
+            <div className="bg-card rounded-xl shadow-sm border p-5">
+              <div className="text-sm text-muted-foreground">Avg Duration</div>
               <div className="text-2xl font-bold mt-1">{formatDuration(Math.round(report.avgCallDuration))}</div>
             </div>
           </div>
 
           {/* Outcome + Flags */}
           <div className="grid grid-cols-3 gap-4">
-            <div className="bg-white rounded-xl shadow-sm border p-5 text-center">
-              <div className="text-2xl font-bold text-green-600">{report.resolvedCalls}</div>
-              <div className="text-sm text-gray-500">Resolved</div>
+            <div className="bg-card rounded-xl shadow-sm border p-5 text-center">
+              <div className="text-2xl font-bold text-success">{report.resolvedCalls}</div>
+              <div className="text-sm text-muted-foreground">Resolved</div>
             </div>
-            <div className="bg-white rounded-xl shadow-sm border p-5 text-center">
-              <div className="text-2xl font-bold text-red-600">{report.unresolvedCalls}</div>
-              <div className="text-sm text-gray-500">Unresolved</div>
+            <div className="bg-card rounded-xl shadow-sm border p-5 text-center">
+              <div className="text-2xl font-bold text-destructive">{report.unresolvedCalls}</div>
+              <div className="text-sm text-muted-foreground">Unresolved</div>
             </div>
-            <div className="bg-white rounded-xl shadow-sm border p-5 text-center">
-              <div className="text-2xl font-bold text-orange-600">{report.flaggedCalls}</div>
-              <div className="text-sm text-gray-500">Flagged</div>
+            <div className="bg-card rounded-xl shadow-sm border p-5 text-center">
+              <div className="text-2xl font-bold text-warning">{report.flaggedCalls}</div>
+              <div className="text-sm text-muted-foreground">Flagged</div>
             </div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Category breakdown */}
-            <div className="bg-white rounded-xl shadow-sm border p-6">
+            <div className="bg-card rounded-xl shadow-sm border p-6">
               <h3 className="font-semibold mb-4">Calls by Category</h3>
               <div className="space-y-3">
                 {report.topCategories.map((cat) => (
                   <div key={cat.name} className="flex items-center justify-between">
                     <span className="text-sm">{cat.name}</span>
                     <div className="flex items-center gap-2">
-                      <div className="w-32 h-2 bg-gray-200 rounded-full">
+                      <div className="w-32 h-2 bg-muted rounded-full">
                         <div
-                          className="h-2 bg-blue-500 rounded-full"
+                          className="h-2 bg-accent rounded-full"
                           style={{ width: `${Math.min(100, (cat.count / report.totalCalls) * 100)}%` }}
                         />
                       </div>
@@ -192,11 +194,11 @@ export default function AdminReports() {
             </div>
 
             {/* Rep breakdown */}
-            <div className="bg-white rounded-xl shadow-sm border p-6">
+            <div className="bg-card rounded-xl shadow-sm border p-6">
               <h3 className="font-semibold mb-4">Rep Performance</h3>
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-gray-500 text-xs">
+                  <tr className="text-muted-foreground text-xs">
                     <th className="text-left py-2">Rep</th>
                     <th className="text-right py-2">Calls</th>
                     <th className="text-right py-2">Minutes</th>

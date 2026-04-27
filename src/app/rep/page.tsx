@@ -40,6 +40,9 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { edgeFn } from '@/lib/supabase/edge';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Separator } from '@/components/ui/primitives';
 
 interface Customer {
   id: string;
@@ -80,6 +83,7 @@ interface ActiveCall {
   call_sid: string;
   started_at: string;
   connected_at: string | null;
+  billable_started_at?: string | null;
   customer?: Customer;
   ai_intake_brief?: IntakeBrief | null;
   ai_intake_completed?: boolean;
@@ -241,7 +245,14 @@ export default function RepDashboard() {
     if (typeof window === 'undefined') return;
     const sp = new URLSearchParams(window.location.search);
     const dial = sp.get('dial');
+    const preloadCustomerId = sp.get('customerId');
     if (!dial) return;
+
+    // Pre-load the customer profile so the rep sees full context the moment
+    // the customer answers — before the call even connects.
+    if (preloadCustomerId) {
+      loadCustomer(preloadCustomerId);
+    }
 
     let fired = false;
     const deadline = Date.now() + 30_000;
@@ -263,6 +274,7 @@ export default function RepDashboard() {
       }
     }, 500);
     return () => clearInterval(tick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Subscribe to real-time call updates
@@ -291,20 +303,23 @@ export default function RepDashboard() {
     };
   }, []);
 
-  // Call timer
+  // Call timer — only counts time AFTER the rep clicks "Confirm & Continue".
+  // The customer is not billed for the chat that establishes whether they
+  // still need help (they might say no and we let them go).
   useEffect(() => {
-    if (!activeCall?.connected_at) {
+    const billableStart = activeCall?.billable_started_at;
+    if (!billableStart) {
       setCallTimer(0);
       return;
     }
     const interval = setInterval(() => {
       const elapsed = Math.floor(
-        (Date.now() - new Date(activeCall.connected_at!).getTime()) / 1000
+        (Date.now() - new Date(billableStart).getTime()) / 1000
       );
       setCallTimer(elapsed);
     }, 1000);
     return () => clearInterval(interval);
-  }, [activeCall?.connected_at]);
+  }, [activeCall?.billable_started_at]);
 
   // Stable callback — must not be inline in JSX or it recreates on every render,
   // which would tear down and restart the Relay WebSocket connection each time.
@@ -404,9 +419,32 @@ export default function RepDashboard() {
     }
   };
 
-  const confirmIdentity = () => {
+  const confirmIdentity = async () => {
     setIdentityConfirmed(true);
-    toast.success('Customer identity confirmed');
+    // Start the billing meter NOW — server-side timestamp is the source of
+    // truth for minute deduction at end-of-call.
+    if (activeCall?.id) {
+      try {
+        const res = await edgeFn('call-outbound', {
+          method: 'POST',
+          body: JSON.stringify({ action: 'confirm', call_id: activeCall.id }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setActiveCall(prev => prev ? { ...prev, billable_started_at: data.billable_started_at } : prev);
+          toast.success('Customer confirmed — billing started');
+          return;
+        }
+      } catch { /* fall through to local-only */ }
+    }
+    // Fallback: still flip local state so the UI moves forward even if the
+    // server confirm fails (rare — e.g. inbound queue calls have no
+    // call-outbound row). Use connected_at as the meter origin.
+    setActiveCall(prev => prev ? {
+      ...prev,
+      billable_started_at: prev.billable_started_at || prev.connected_at || new Date().toISOString(),
+    } : prev);
+    toast.success('Customer confirmed — billing started');
   };
 
   const updateStatus = async (status: string) => {
@@ -788,73 +826,63 @@ export default function RepDashboard() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+        <Loader2 className="size-8 animate-spin text-accent" />
       </div>
     );
   }
 
+  const statusDot =
+    repStatus === 'available' ? 'bg-success'
+    : repStatus === 'on_call' ? 'bg-warning'
+    : repStatus === 'busy' ? 'bg-destructive'
+    : 'bg-muted-foreground/40';
+
   return (
     <div className="space-y-6">
       {/* Status Bar */}
-      <div className="bg-white rounded-xl shadow-sm border p-4 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <h2 className="text-xl font-semibold">Rep Dashboard</h2>
-          <div className="flex items-center gap-2">
-            <div
-              className={`w-3 h-3 rounded-full ${
-                repStatus === 'available'
-                  ? 'bg-green-500'
-                  : repStatus === 'on_call'
-                  ? 'bg-yellow-500'
-                  : repStatus === 'busy'
-                  ? 'bg-red-500'
-                  : 'bg-gray-400'
-              }`}
-            />
-            <span className="text-sm font-medium capitalize">
-              {repStatus.replace('_', ' ')}
-            </span>
+      <Card>
+        <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span className={`size-2.5 rounded-full ${statusDot} ${repStatus === 'on_call' ? 'pulse-ring' : ''}`} />
+              <span className="text-sm font-medium capitalize text-foreground">
+                {repStatus.replace('_', ' ')}
+              </span>
+            </div>
+            <Separator orientation="vertical" className="h-5" />
+            <span className="text-xs text-muted-foreground">Rep workspace</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant={repStatus === 'available' ? 'success' : 'outline'}
+              onClick={() => updateStatus('available')}
+            >
+              Available
+            </Button>
+            <Button
+              size="sm"
+              variant={repStatus === 'busy' ? 'destructive' : 'outline'}
+              onClick={() => updateStatus('busy')}
+            >
+              Busy
+            </Button>
+            <Button
+              size="sm"
+              variant={repStatus === 'offline' ? 'secondary' : 'ghost'}
+              onClick={() => updateStatus('offline')}
+            >
+              Offline
+            </Button>
           </div>
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => updateStatus('available')}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
-              repStatus === 'available'
-                ? 'bg-green-100 text-green-800 ring-2 ring-green-500'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
-          >
-            Available
-          </button>
-          <button
-            onClick={() => updateStatus('busy')}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
-              repStatus === 'busy'
-                ? 'bg-red-100 text-red-800 ring-2 ring-red-500'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
-          >
-            Busy
-          </button>
-          <button
-            onClick={() => updateStatus('offline')}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
-              repStatus === 'offline'
-                ? 'bg-gray-300 text-gray-800 ring-2 ring-gray-500'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
-          >
-            Offline
-          </button>
-        </div>
-      </div>
+      </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Active Call Panel */}
         <div className="lg:col-span-2 space-y-6">
           {/* Call Info */}
-          <div className="bg-white rounded-xl shadow-sm border p-6">
+          <div className="bg-card rounded-xl shadow-sm border p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold flex items-center gap-2">
                 <Phone className="w-5 h-5" />
@@ -862,13 +890,15 @@ export default function RepDashboard() {
               </h3>
               {activeCall && (
                 <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-2 text-lg font-mono">
-                    <Clock className="w-5 h-5 text-gray-500" />
-                    {formatDuration(callTimer)}
+                  <div className="flex items-center gap-2 text-lg font-mono" title={activeCall.billable_started_at ? 'Billable time' : 'Billing not started — click Confirm & Continue'}>
+                    <Clock className={`w-5 h-5 ${activeCall.billable_started_at ? 'text-muted-foreground' : 'text-warning'}`} />
+                    {activeCall.billable_started_at
+                      ? formatDuration(callTimer)
+                      : <span className="text-sm text-warning font-sans">Awaiting confirmation</span>}
                   </div>
                   <button
                     onClick={endCall}
-                    className="flex items-center gap-2 bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition"
+                    className="flex items-center gap-2 bg-destructive text-white px-4 py-2 rounded-lg hover:bg-destructive/90 transition"
                   >
                     <PhoneOff className="w-4 h-4" />
                     End Call
@@ -881,17 +911,17 @@ export default function RepDashboard() {
               <div className="space-y-4">
                 {/* Customer Screen Pop */}
                 {customer ? (
-                  <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+                  <div className="bg-accent/10 rounded-lg p-4 border border-accent/30">
                     <div className="flex items-center gap-2 mb-3">
-                      <User className="w-5 h-5 text-blue-600" />
+                      <User className="w-5 h-5 text-accent" />
                       <span className="font-semibold text-lg">{customer.full_name}</span>
                       <span
                         className={`ml-2 px-2 py-0.5 rounded text-xs font-medium ${
                           customer.status === 'active'
-                            ? 'bg-green-100 text-green-800'
+                            ? 'bg-success/15 text-success'
                             : customer.status === 'flagged'
-                            ? 'bg-red-100 text-red-800'
-                            : 'bg-gray-100 text-gray-800'
+                            ? 'bg-destructive/15 text-destructive'
+                            : 'bg-muted text-foreground'
                         }`}
                       >
                         {customer.status}
@@ -899,22 +929,22 @@ export default function RepDashboard() {
                     </div>
                     <div className="grid grid-cols-2 gap-4 text-sm">
                       <div>
-                        <span className="text-gray-500">Phone:</span>{' '}
+                        <span className="text-muted-foreground">Phone:</span>{' '}
                         {formatPhone(customer.primary_phone)}
                       </div>
                       <div>
-                        <span className="text-gray-500">Email:</span>{' '}
+                        <span className="text-muted-foreground">Email:</span>{' '}
                         {customer.email || 'N/A'}
                       </div>
                       <div>
-                        <span className="text-gray-500">Balance:</span>{' '}
+                        <span className="text-muted-foreground">Balance:</span>{' '}
                         <span
                           className={`font-semibold ${
                             customer.current_balance_minutes <= 0
-                              ? 'text-red-600'
+                              ? 'text-destructive'
                               : customer.current_balance_minutes <= 5
-                              ? 'text-yellow-600'
-                              : 'text-green-600'
+                              ? 'text-warning'
+                              : 'text-success'
                           }`}
                         >
                           {formatMinutes(customer.current_balance_minutes)}
@@ -922,14 +952,14 @@ export default function RepDashboard() {
                       </div>
                     </div>
                     {customer.internal_notes && (
-                      <div className="mt-3 p-2 bg-yellow-50 rounded border border-yellow-200 text-sm">
-                        <AlertTriangle className="w-4 h-4 text-yellow-600 inline mr-1" />
+                      <div className="mt-3 p-2 bg-warning/10 rounded border border-warning/30 text-sm">
+                        <AlertTriangle className="w-4 h-4 text-warning inline mr-1" />
                         {customer.internal_notes}
                       </div>
                     )}
                   </div>
                 ) : (
-                  <div className="bg-gray-50 rounded-lg p-4 border text-gray-500 text-center">
+                  <div className="bg-muted/40 rounded-lg p-4 border text-muted-foreground text-center">
                     <PhoneMissed className="w-8 h-8 mx-auto mb-2" />
                     Unknown caller — no customer profile found
                   </div>
@@ -937,23 +967,23 @@ export default function RepDashboard() {
 
                 {/* No-minutes / Low-balance banner — prompts rep to collect payment */}
                 {customer && customer.current_balance_minutes <= 0 && (
-                  <div className="bg-red-50 rounded-lg p-4 border-2 border-red-300">
+                  <div className="bg-destructive/10 rounded-lg p-4 border-2 border-destructive/40">
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-red-600 text-white text-xs font-bold">!</span>
-                      <span className="font-semibold text-red-800">
+                      <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-destructive text-white text-xs font-bold">!</span>
+                      <span className="font-semibold text-destructive">
                         {(customer.total_minutes_purchased ?? 0) > 0
                           ? 'No minutes remaining'
                           : 'New caller — no package yet'}
                       </span>
                     </div>
-                    <p className="text-sm text-red-700 mb-3">
+                    <p className="text-sm text-destructive mb-3">
                       {(customer.total_minutes_purchased ?? 0) > 0
                         ? 'This customer has $0 balance. Offer to top up before starting work.'
                         : 'This is a first-time caller with no package. Offer a package and collect payment before starting work.'}
                     </p>
                     <a
                       href={`/rep/payments?customerId=${customer.id}&lock=1`}
-                      className="inline-flex items-center gap-2 px-3 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700"
+                      className="inline-flex items-center gap-2 px-3 py-2 bg-destructive text-white text-sm font-medium rounded-lg hover:bg-destructive/90"
                     >
                       Process Payment →
                     </a>
@@ -962,12 +992,12 @@ export default function RepDashboard() {
 
                 {/* Name Capture Popup — new callers */}
                 {customer && showNameCapture && (
-                  <div className="bg-purple-50 rounded-lg p-4 border-2 border-purple-300 animate-pulse-once">
+                  <div className="bg-accent/10 rounded-lg p-4 border-2 border-accent/40">
                     <div className="flex items-center gap-2 mb-2">
-                      <UserPlus className="w-5 h-5 text-purple-600" />
-                      <span className="font-semibold text-purple-800">New Caller — Please ask for their name</span>
+                      <UserPlus className="w-5 h-5 text-accent" />
+                      <span className="font-semibold text-accent">New Caller — Please ask for their name</span>
                     </div>
-                    <p className="text-sm text-purple-700 mb-3">
+                    <p className="text-sm text-accent mb-3">
                       This is a first-time caller. Ask them: &quot;May I have your name for our records?&quot;
                     </p>
                     <div className="flex gap-2">
@@ -975,19 +1005,19 @@ export default function RepDashboard() {
                         value={newCustomerName}
                         onChange={(e) => setNewCustomerName(e.target.value)}
                         placeholder="Enter customer's name..."
-                        className="flex-1 rounded-lg border border-purple-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="flex-1 rounded-lg border border-accent/40 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                         onKeyDown={(e) => e.key === 'Enter' && saveCustomerName()}
                       />
                       <button
                         onClick={saveCustomerName}
                         disabled={!newCustomerName.trim()}
-                        className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 transition disabled:bg-gray-300 disabled:cursor-not-allowed"
+                        className="px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90 transition disabled:bg-muted disabled:cursor-not-allowed"
                       >
                         Save
                       </button>
                       <button
                         onClick={() => setShowNameCapture(false)}
-                        className="px-3 py-2 text-gray-500 hover:text-gray-700"
+                        className="px-3 py-2 text-muted-foreground hover:text-foreground"
                         title="Dismiss"
                       >
                         <X className="w-4 h-4" />
@@ -996,28 +1026,30 @@ export default function RepDashboard() {
                   </div>
                 )}
 
-                {/* Identity Confirmation — returning callers */}
-                {customer && !showNameCapture && !customer.full_name.startsWith('Caller ') && !identityConfirmed && (
-                  <div className="bg-amber-50 rounded-lg p-4 border-2 border-amber-300">
+                {/* Confirm & Continue gate — billing only starts AFTER the rep
+                    confirms with the customer that they still need help. The
+                    customer might decline ("no thanks, I no longer need it"),
+                    in which case the rep ends the call without billing. */}
+                {activeCall && !activeCall.billable_started_at && !showNameCapture && (
+                  <div className="bg-warning/10 rounded-lg p-4 border-2 border-warning/40">
                     <div className="flex items-center gap-2 mb-2">
-                      <UserCheck className="w-5 h-5 text-amber-600" />
-                      <span className="font-semibold text-amber-800">Verify Customer Identity</span>
+                      <UserCheck className="w-5 h-5 text-warning" />
+                      <span className="font-semibold text-warning">Confirm with the customer before billing starts</span>
                     </div>
-                    <p className="text-sm text-amber-700 mb-3">
-                      Please confirm: &quot;Am I speaking with <strong>{customer.full_name}</strong>?&quot;
+                    <p className="text-sm text-warning mb-3">
+                      {customer && !customer.full_name.startsWith('Caller ')
+                        ? <>Verify: &quot;Am I speaking with <strong>{customer.full_name}</strong>, and do you still need help today?&quot;</>
+                        : <>Confirm with the caller that they still need assistance before the minute meter starts.</>}
+                    </p>
+                    <p className="text-xs text-warning mb-3">
+                      The customer is not billed until you click below. If they decline, end the call instead.
                     </p>
                     <div className="flex gap-2">
                       <button
                         onClick={confirmIdentity}
-                        className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition"
+                        className="px-4 py-2 bg-success text-white rounded-lg text-sm font-medium hover:bg-success/90 transition"
                       >
-                        Identity Confirmed
-                      </button>
-                      <button
-                        onClick={() => setIdentityConfirmed(true)}
-                        className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-300 transition"
-                      >
-                        Skip
+                        Confirm &amp; Continue
                       </button>
                     </div>
                   </div>
@@ -1025,28 +1057,28 @@ export default function RepDashboard() {
 
                 {/* AI Intake Brief */}
                 {activeCall?.ai_intake_brief && (
-                  <div className="bg-amber-50 rounded-lg p-4 border border-amber-200 space-y-3">
+                  <div className="bg-warning/10 rounded-lg p-4 border border-warning/30 space-y-3">
                     <div className="flex items-center gap-2">
-                      <Sparkles className="w-5 h-5 text-amber-600" />
-                      <span className="font-semibold text-amber-900">AI Intake Brief</span>
+                      <Sparkles className="w-5 h-5 text-warning" />
+                      <span className="font-semibold text-warning">AI Intake Brief</span>
                       {activeCall.ai_intake_brief.category && (
-                        <span className="ml-auto text-xs bg-amber-200 text-amber-800 px-2 py-0.5 rounded-full capitalize">
+                        <span className="ml-auto text-xs bg-warning/20 text-warning px-2 py-0.5 rounded-full capitalize">
                           {activeCall.ai_intake_brief.category}
                         </span>
                       )}
                     </div>
-                    <p className="text-sm text-amber-800">{activeCall.ai_intake_brief.summary}</p>
+                    <p className="text-sm text-warning">{activeCall.ai_intake_brief.summary}</p>
 
                     {/* Search terms — click to copy */}
                     {(activeCall.ai_intake_brief.suggestions?.search_terms?.length ?? 0) > 0 && (
                       <div>
-                        <p className="text-xs font-medium text-amber-700 mb-1.5">Search terms:</p>
+                        <p className="text-xs font-medium text-warning mb-1.5">Search terms:</p>
                         <div className="flex flex-wrap gap-1">
                           {activeCall.ai_intake_brief.suggestions.search_terms!.map((term, i) => (
                             <button
                               key={i}
                               onClick={() => { navigator.clipboard.writeText(term); toast.success('Copied!'); }}
-                              className="text-xs bg-white border border-amber-300 text-amber-800 px-2 py-0.5 rounded hover:bg-amber-100 transition"
+                              className="text-xs bg-card border border-warning/40 text-warning px-2 py-0.5 rounded hover:bg-warning/15 transition"
                               title="Click to copy"
                             >
                               {term}
@@ -1058,7 +1090,7 @@ export default function RepDashboard() {
 
                     {/* Platforms */}
                     {(activeCall.ai_intake_brief.suggestions?.platforms?.length ?? 0) > 0 && (
-                      <div className="flex items-center gap-2 text-xs text-amber-700">
+                      <div className="flex items-center gap-2 text-xs text-warning">
                         <span className="font-medium">Check:</span>
                         {activeCall.ai_intake_brief.suggestions.platforms!.join(' · ')}
                       </div>
@@ -1066,7 +1098,7 @@ export default function RepDashboard() {
 
                     {/* Rep tip */}
                     {activeCall.ai_intake_brief.suggestions?.rep_tip && (
-                      <div className="text-xs bg-amber-100 rounded p-2 text-amber-800">
+                      <div className="text-xs bg-warning/15 rounded p-2 text-warning">
                         <span className="font-medium">Tip: </span>
                         {activeCall.ai_intake_brief.suggestions.rep_tip}
                       </div>
@@ -1074,27 +1106,27 @@ export default function RepDashboard() {
 
                     {/* Previously found item */}
                     {activeCall.ai_intake_brief.previous_finding && (
-                      <div className="bg-white rounded p-3 border border-amber-300">
+                      <div className="bg-card rounded p-3 border border-warning/40">
                         <div className="flex items-center gap-1.5 mb-1">
-                          <BookMarked className="w-4 h-4 text-amber-600" />
-                          <span className="text-xs font-semibold text-amber-800 uppercase tracking-wide">Previously Found</span>
-                          <span className="ml-auto text-xs text-amber-500">
+                          <BookMarked className="w-4 h-4 text-warning" />
+                          <span className="text-xs font-semibold text-warning uppercase tracking-wide">Previously Found</span>
+                          <span className="ml-auto text-xs text-warning">
                             {new Date(activeCall.ai_intake_brief.previous_finding.found_at).toLocaleDateString()}
                           </span>
                         </div>
                         <p className="text-sm font-medium">{activeCall.ai_intake_brief.previous_finding.description}</p>
                         {activeCall.ai_intake_brief.previous_finding.price && (
-                          <p className="text-sm font-semibold text-green-700">{activeCall.ai_intake_brief.previous_finding.price}</p>
+                          <p className="text-sm font-semibold text-success">{activeCall.ai_intake_brief.previous_finding.price}</p>
                         )}
                         {activeCall.ai_intake_brief.previous_finding.platform && (
-                          <p className="text-xs text-gray-500">{activeCall.ai_intake_brief.previous_finding.platform}</p>
+                          <p className="text-xs text-muted-foreground">{activeCall.ai_intake_brief.previous_finding.platform}</p>
                         )}
                         {activeCall.ai_intake_brief.previous_finding.url && (
                           <a
                             href={activeCall.ai_intake_brief.previous_finding.url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 mt-1 break-all"
+                            className="flex items-center gap-1 text-xs text-accent hover:text-accent mt-1 break-all"
                           >
                             <ExternalLink className="w-3 h-3 flex-shrink-0" />
                             {activeCall.ai_intake_brief.previous_finding.url.slice(0, 60)}
@@ -1102,7 +1134,7 @@ export default function RepDashboard() {
                           </a>
                         )}
                         {activeCall.ai_intake_brief.previous_finding.notes && (
-                          <p className="text-xs text-gray-500 mt-1">{activeCall.ai_intake_brief.previous_finding.notes}</p>
+                          <p className="text-xs text-muted-foreground mt-1">{activeCall.ai_intake_brief.previous_finding.notes}</p>
                         )}
                       </div>
                     )}
@@ -1111,27 +1143,27 @@ export default function RepDashboard() {
 
                 {/* Call Notes */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-sm font-medium text-foreground mb-1">
                     Call Notes
                   </label>
                   <textarea
                     value={repNotes}
                     onChange={(e) => setRepNotes(e.target.value)}
                     rows={3}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full rounded-lg border border-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                     placeholder="Enter notes about this call..."
                   />
                 </div>
 
                 {/* Category */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-sm font-medium text-foreground mb-1">
                     Task Category
                   </label>
                   <select
                     value={selectedCategory}
                     onChange={(e) => setSelectedCategory(e.target.value)}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full rounded-lg border border-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     <option value="">Select category...</option>
                     {categories.map((cat) => (
@@ -1144,7 +1176,7 @@ export default function RepDashboard() {
 
                 {/* Outcome */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Outcome</label>
+                  <label className="block text-sm font-medium text-foreground mb-1">Outcome</label>
                   <div className="flex gap-2">
                     {(['resolved', 'partial', 'unresolved'] as const).map((outcome) => (
                       <button
@@ -1153,11 +1185,11 @@ export default function RepDashboard() {
                         className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition capitalize ${
                           selectedOutcome === outcome
                             ? outcome === 'resolved'
-                              ? 'bg-green-100 border-green-500 text-green-800 ring-2 ring-green-500'
+                              ? 'bg-success/15 border-success text-success ring-2 ring-success'
                               : outcome === 'partial'
-                              ? 'bg-yellow-100 border-yellow-500 text-yellow-800 ring-2 ring-yellow-500'
-                              : 'bg-red-100 border-red-500 text-red-800 ring-2 ring-red-500'
-                            : 'hover:bg-gray-50'
+                              ? 'bg-warning/15 border-warning text-warning ring-2 ring-warning'
+                              : 'bg-destructive/15 border-destructive text-destructive ring-2 ring-destructive'
+                            : 'hover:bg-muted/50'
                         }`}
                       >
                         {outcome === 'resolved' && <CheckCircle className="w-4 h-4 inline mr-1" />}
@@ -1168,10 +1200,10 @@ export default function RepDashboard() {
                 </div>
 
                 {/* Call Extension */}
-                <div className="flex items-center justify-between p-3 bg-orange-50 rounded-lg border border-orange-200">
+                <div className="flex items-center justify-between p-3 bg-warning/10 rounded-lg border border-warning/30">
                   <div className="text-sm">
-                    <span className="font-medium text-orange-800">Extensions:</span>{' '}
-                    <span className="text-orange-600">
+                    <span className="font-medium text-warning">Extensions:</span>{' '}
+                    <span className="text-warning">
                       {extensionsUsed} / {maxExtensions} used
                     </span>
                   </div>
@@ -1180,8 +1212,8 @@ export default function RepDashboard() {
                     disabled={extensionsUsed >= maxExtensions}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition ${
                       extensionsUsed >= maxExtensions
-                        ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                        : 'bg-orange-600 text-white hover:bg-orange-700'
+                        ? 'bg-muted text-muted-foreground/80 cursor-not-allowed'
+                        : 'bg-warning text-white hover:bg-warning/90'
                     }`}
                   >
                     <TimerReset className="w-4 h-4" />
@@ -1191,13 +1223,13 @@ export default function RepDashboard() {
 
                 {/* Log Item Found */}
                 {showLogFinding ? (
-                  <div className="p-3 bg-green-50 rounded-lg border border-green-200 space-y-2">
+                  <div className="p-3 bg-success/10 rounded-lg border border-success/30 space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-green-800 flex items-center gap-1.5">
+                      <span className="text-sm font-medium text-success flex items-center gap-1.5">
                         <BookMarked className="w-4 h-4" />
                         Log Item Found
                       </span>
-                      <button onClick={() => setShowLogFinding(false)} className="text-gray-400 hover:text-gray-600">
+                      <button onClick={() => setShowLogFinding(false)} className="text-muted-foreground/80 hover:text-muted-foreground">
                         <X className="w-4 h-4" />
                       </button>
                     </div>
@@ -1205,38 +1237,38 @@ export default function RepDashboard() {
                       placeholder="What was found? (e.g. Dell Inspiron 15 laptop)"
                       value={newFinding.description}
                       onChange={(e) => setNewFinding(p => ({ ...p, description: e.target.value }))}
-                      className="w-full rounded border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                      className="w-full rounded border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-success"
                     />
                     <input
                       placeholder="URL (optional)"
                       value={newFinding.itemUrl}
                       onChange={(e) => setNewFinding(p => ({ ...p, itemUrl: e.target.value }))}
-                      className="w-full rounded border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                      className="w-full rounded border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-success"
                     />
                     <div className="grid grid-cols-2 gap-2">
                       <input
                         placeholder="Price (e.g. $449)"
                         value={newFinding.itemPrice}
                         onChange={(e) => setNewFinding(p => ({ ...p, itemPrice: e.target.value }))}
-                        className="rounded border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                        className="rounded border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-success"
                       />
                       <input
                         placeholder="Platform (e.g. Amazon)"
                         value={newFinding.itemPlatform}
                         onChange={(e) => setNewFinding(p => ({ ...p, itemPlatform: e.target.value }))}
-                        className="rounded border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                        className="rounded border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-success"
                       />
                     </div>
                     <input
                       placeholder="Notes (optional)"
                       value={newFinding.itemNotes}
                       onChange={(e) => setNewFinding(p => ({ ...p, itemNotes: e.target.value }))}
-                      className="w-full rounded border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                      className="w-full rounded border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-success"
                     />
                     <button
                       onClick={logFinding}
                       disabled={!newFinding.description.trim() || savingFinding}
-                      className="w-full bg-green-600 text-white rounded py-1.5 text-sm font-medium hover:bg-green-700 transition disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                      className="w-full bg-success text-white rounded py-1.5 text-sm font-medium hover:bg-success/90 transition disabled:bg-muted disabled:cursor-not-allowed flex items-center justify-center gap-2"
                     >
                       {savingFinding ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                       Save Finding
@@ -1245,7 +1277,7 @@ export default function RepDashboard() {
                 ) : (
                   <button
                     onClick={() => setShowLogFinding(true)}
-                    className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg border-2 border-dashed border-gray-300 text-sm text-gray-500 hover:border-green-400 hover:text-green-600 transition"
+                    className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg border-2 border-dashed border-border text-sm text-muted-foreground hover:border-success/50 hover:text-success transition"
                   >
                     <BookMarked className="w-4 h-4" />
                     Log Item Found
@@ -1253,8 +1285,8 @@ export default function RepDashboard() {
                 )}
               </div>
             ) : (
-              <div className="text-center py-12 text-gray-500">
-                <Phone className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+              <div className="text-center py-12 text-muted-foreground">
+                <Phone className="w-12 h-12 mx-auto mb-3 text-muted-foreground/60" />
                 <p className="text-lg font-medium">No active call</p>
                 <p className="text-sm">Set yourself as Available to receive incoming calls.</p>
               </div>
@@ -1278,9 +1310,9 @@ export default function RepDashboard() {
 
           {/* Customer Browser (Browserbase) — only visible while on a call */}
           {activeCall && customer && (
-            <div className={`bg-white rounded-xl shadow-sm border ${bbFullscreen ? 'fixed inset-0 z-50 flex flex-col p-3 rounded-none' : 'p-4'}`}>
+            <div className={`bg-card rounded-xl shadow-sm border ${bbFullscreen ? 'fixed inset-0 z-50 flex flex-col p-3 rounded-none' : 'p-4'}`}>
               <div className="flex items-center justify-between mb-2">
-                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-2">
+                <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-2">
                   <Globe className="w-4 h-4" />
                   {customer.full_name}&apos;s Browser
                 </h3>
@@ -1290,21 +1322,21 @@ export default function RepDashboard() {
                       <button
                         onClick={() => customer && refreshBbTabs(customer.id)}
                         disabled={bbTabsLoading}
-                        className="text-xs px-2 py-1 rounded border hover:bg-gray-50 flex items-center gap-1"
+                        className="text-xs px-2 py-1 rounded border hover:bg-muted/50 flex items-center gap-1"
                         title="Refresh tab list"
                       >
                         <RefreshCw className={`w-3 h-3 ${bbTabsLoading ? 'animate-spin' : ''}`} />
                       </button>
                       <button
                         onClick={openNewBbTab}
-                        className="text-xs px-2 py-1 rounded border hover:bg-gray-50 flex items-center gap-1"
+                        className="text-xs px-2 py-1 rounded border hover:bg-muted/50 flex items-center gap-1"
                         title="Open new tab"
                       >
                         <Plus className="w-3 h-3" /> New tab
                       </button>
                       <button
                         onClick={() => setBbFullscreen(v => !v)}
-                        className="text-xs px-2 py-1 rounded border hover:bg-gray-50 flex items-center gap-1"
+                        className="text-xs px-2 py-1 rounded border hover:bg-muted/50 flex items-center gap-1"
                         title={bbFullscreen ? 'Exit full screen' : 'Full screen'}
                       >
                         {bbFullscreen ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
@@ -1313,7 +1345,7 @@ export default function RepDashboard() {
                       {!bbFullscreen && (
                         <button
                           onClick={() => setBbExpanded(v => !v)}
-                          className="text-xs px-2 py-1 rounded border hover:bg-gray-50"
+                          className="text-xs px-2 py-1 rounded border hover:bg-muted/50"
                         >
                           {bbExpanded ? 'Smaller' : 'Bigger'}
                         </button>
@@ -1324,7 +1356,7 @@ export default function RepDashboard() {
                           const target = active || bbLiveUrl;
                           if (target) window.open(target, '_blank', 'noopener,noreferrer,width=1600,height=1000');
                         }}
-                        className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 flex items-center gap-1"
+                        className="text-xs px-2 py-1 rounded bg-accent text-white hover:bg-accent/90 flex items-center gap-1"
                         title="Open in a real browser window (much bigger)"
                       >
                         <ExternalLink className="w-3 h-3" />
@@ -1338,7 +1370,7 @@ export default function RepDashboard() {
                 <div className="space-y-2">
                   <button
                     onClick={() => openLocalChrome(customer.id, 'https://www.google.com', `${customer.full_name}'s profile`, { customerId: customer.id })}
-                    className="w-full flex items-center justify-center gap-2 py-3 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition"
+                    className="w-full flex items-center justify-center gap-2 py-3 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent/90 transition"
                   >
                     <ExternalLink className="w-4 h-4" />
                     Open Chrome — {customer.full_name}&apos;s profile
@@ -1355,8 +1387,8 @@ export default function RepDashboard() {
                           key={tab.id}
                           className={`group flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-t-md border-b-2 cursor-pointer whitespace-nowrap max-w-[220px] ${
                             bbActiveTabId === tab.id
-                              ? 'bg-blue-50 border-blue-500 text-blue-700 font-medium'
-                              : 'bg-gray-50 border-transparent text-gray-600 hover:bg-gray-100'
+                              ? 'bg-accent/10 border-accent text-accent font-medium'
+                              : 'bg-muted/40 border-transparent text-muted-foreground hover:bg-muted'
                           }`}
                           onClick={() => setBbActiveTabId(tab.id)}
                           title={tab.url}
@@ -1365,13 +1397,13 @@ export default function RepDashboard() {
                             // eslint-disable-next-line @next/next/no-img-element
                             <img src={tab.faviconUrl} alt="" className="w-3.5 h-3.5 flex-shrink-0" />
                           ) : (
-                            <Globe className="w-3.5 h-3.5 flex-shrink-0 text-gray-400" />
+                            <Globe className="w-3.5 h-3.5 flex-shrink-0 text-muted-foreground/80" />
                           )}
                           <span className="truncate">{tab.title || new URL(tab.url || 'about:blank').hostname || 'New tab'}</span>
                           {bbTabs.length > 1 && (
                             <button
                               onClick={(e) => { e.stopPropagation(); void closeBbTab(tab.id); }}
-                              className="opacity-0 group-hover:opacity-100 hover:bg-gray-300 rounded p-0.5 transition"
+                              className="opacity-0 group-hover:opacity-100 hover:bg-muted rounded p-0.5 transition"
                               title="Close tab"
                             >
                               <X className="w-3 h-3" />
@@ -1387,7 +1419,7 @@ export default function RepDashboard() {
                         ? (bbTabs.find(t => t.id === bbActiveTabId)?.debuggerFullscreenUrl || bbLiveUrl)
                         : bbLiveUrl
                     }
-                    className={`w-full rounded-lg border bg-gray-50 ${
+                    className={`w-full rounded-lg border bg-muted/40 ${
                       bbFullscreen
                         ? 'flex-1 min-h-0'
                         : bbExpanded
@@ -1406,8 +1438,8 @@ export default function RepDashboard() {
         {/* Right Panel: Softphone + Password Vault */}
         <div className="space-y-6">
           {/* Softphone */}
-          <div className="bg-white rounded-xl shadow-sm border p-4">
-            <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+          <div className="bg-card rounded-xl shadow-sm border p-4">
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
               Softphone
             </h3>
             <Softphone
@@ -1450,19 +1482,19 @@ export default function RepDashboard() {
           </div>
 
           {/* Rep's personal browser — always available, outside customer calls */}
-          <div className={`bg-white rounded-xl shadow-sm border ${rbFullscreen ? 'fixed inset-0 z-50 flex flex-col p-3 rounded-none' : 'p-4'}`}>
+          <div className={`bg-card rounded-xl shadow-sm border ${rbFullscreen ? 'fixed inset-0 z-50 flex flex-col p-3 rounded-none' : 'p-4'}`}>
             <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-2">
                 <Globe className="w-4 h-4" />
                 My Browser
               </h3>
               <div className="flex items-center gap-1.5">
                 {rbLiveUrl && (
                   <>
-                    <button onClick={() => refreshRbTabs()} className="text-xs px-2 py-1 rounded border hover:bg-gray-50" title="Refresh tabs">
+                    <button onClick={() => refreshRbTabs()} className="text-xs px-2 py-1 rounded border hover:bg-muted/50" title="Refresh tabs">
                       <RefreshCw className="w-3 h-3" />
                     </button>
-                    <button onClick={newRbTab} className="text-xs px-2 py-1 rounded border hover:bg-gray-50 flex items-center gap-1" title="New tab">
+                    <button onClick={newRbTab} className="text-xs px-2 py-1 rounded border hover:bg-muted/50 flex items-center gap-1" title="New tab">
                       <Plus className="w-3 h-3" /> New
                     </button>
                     <button
@@ -1471,21 +1503,21 @@ export default function RepDashboard() {
                         const target = active || rbLiveUrl;
                         if (target) window.open(target, '_blank', 'noopener,noreferrer,width=1600,height=1000');
                       }}
-                      className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 flex items-center gap-1"
+                      className="text-xs px-2 py-1 rounded bg-accent text-white hover:bg-accent/90 flex items-center gap-1"
                       title="Open in a real browser window (much bigger)"
                     >
                       <ExternalLink className="w-3 h-3" /> Pop out
                     </button>
-                    <button onClick={() => setRbFullscreen(v => !v)} className="text-xs px-2 py-1 rounded border hover:bg-gray-50 flex items-center gap-1">
+                    <button onClick={() => setRbFullscreen(v => !v)} className="text-xs px-2 py-1 rounded border hover:bg-muted/50 flex items-center gap-1">
                       {rbFullscreen ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
                       {rbFullscreen ? 'Exit' : 'Full'}
                     </button>
                     {!rbFullscreen && (
-                      <button onClick={() => setRbOpen(v => !v)} className="text-xs px-2 py-1 rounded border hover:bg-gray-50">
+                      <button onClick={() => setRbOpen(v => !v)} className="text-xs px-2 py-1 rounded border hover:bg-muted/50">
                         {rbOpen ? 'Hide' : 'Show'}
                       </button>
                     )}
-                    <button onClick={endRepBrowser} className="text-xs px-2 py-1 rounded border hover:bg-red-50 text-red-600 flex items-center gap-1" title="End session">
+                    <button onClick={endRepBrowser} className="text-xs px-2 py-1 rounded border hover:bg-destructive/10 text-destructive flex items-center gap-1" title="End session">
                       <X className="w-3 h-3" /> End
                     </button>
                   </>
@@ -1496,7 +1528,7 @@ export default function RepDashboard() {
               <div className="space-y-2">
                 <button
                   onClick={() => openLocalChrome(`rep-${repId || 'me'}`, 'https://www.google.com', 'your profile')}
-                  className="w-full flex items-center justify-center gap-2 py-3 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition"
+                  className="w-full flex items-center justify-center gap-2 py-3 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent/90 transition"
                 >
                   <ExternalLink className="w-4 h-4" />
                   Open Chrome — my profile
@@ -1511,8 +1543,8 @@ export default function RepDashboard() {
                         key={tab.id}
                         className={`group flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-t-md border-b-2 cursor-pointer whitespace-nowrap max-w-[220px] ${
                           rbActiveTabId === tab.id
-                            ? 'bg-blue-50 border-blue-500 text-blue-700 font-medium'
-                            : 'bg-gray-50 border-transparent text-gray-600 hover:bg-gray-100'
+                            ? 'bg-accent/10 border-accent text-accent font-medium'
+                            : 'bg-muted/40 border-transparent text-muted-foreground hover:bg-muted'
                         }`}
                         onClick={() => setRbActiveTabId(tab.id)}
                         title={tab.url}
@@ -1521,13 +1553,13 @@ export default function RepDashboard() {
                           // eslint-disable-next-line @next/next/no-img-element
                           <img src={tab.faviconUrl} alt="" className="w-3.5 h-3.5 flex-shrink-0" />
                         ) : (
-                          <Globe className="w-3.5 h-3.5 flex-shrink-0 text-gray-400" />
+                          <Globe className="w-3.5 h-3.5 flex-shrink-0 text-muted-foreground/80" />
                         )}
                         <span className="truncate">{tab.title || (tab.url ? new URL(tab.url).hostname : 'New tab')}</span>
                         {rbTabs.length > 1 && (
                           <button
                             onClick={(e) => { e.stopPropagation(); void closeRbTab(tab.id); }}
-                            className="opacity-0 group-hover:opacity-100 hover:bg-gray-300 rounded p-0.5 transition"
+                            className="opacity-0 group-hover:opacity-100 hover:bg-muted rounded p-0.5 transition"
                             title="Close tab"
                           >
                             <X className="w-3 h-3" />
@@ -1539,17 +1571,17 @@ export default function RepDashboard() {
                 )}
                 <iframe
                   src={rbActiveTabId ? (rbTabs.find(t => t.id === rbActiveTabId)?.debuggerFullscreenUrl || rbLiveUrl) : rbLiveUrl}
-                  className={`w-full rounded-lg border bg-gray-50 ${rbFullscreen ? 'flex-1 min-h-0' : 'h-[85vh]'}`}
+                  className={`w-full rounded-lg border bg-muted/40 ${rbFullscreen ? 'flex-1 min-h-0' : 'h-[85vh]'}`}
                   sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-popups-to-escape-sandbox"
                   allow="clipboard-read; clipboard-write; autoplay; microphone; camera"
                 />
               </div>
             ) : (
-              <p className="text-xs text-gray-500 py-2">Browser session active — click <strong>Show</strong> to reveal.</p>
+              <p className="text-xs text-muted-foreground py-2">Browser session active — click <strong>Show</strong> to reveal.</p>
             )}
           </div>
 
-          <div className="bg-white rounded-xl shadow-sm border p-6">
+          <div className="bg-card rounded-xl shadow-sm border p-6">
             <h3 className="text-lg font-semibold flex items-center gap-2 mb-4">
               <Lock className="w-5 h-5" />
               Password Vault
@@ -1558,24 +1590,24 @@ export default function RepDashboard() {
             {activeCall && customer ? (
               <div className="space-y-3">
                 {credentials.length === 0 && !showAddCredential ? (
-                  <p className="text-sm text-gray-500 text-center py-4">
+                  <p className="text-sm text-muted-foreground text-center py-4">
                     No saved credentials for this customer.
                   </p>
                 ) : (
                   credentials.map((cred) => (
                     <div
                       key={cred.id}
-                      className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border"
+                      className="flex items-center justify-between p-3 bg-muted/40 rounded-lg border"
                     >
                       <div>
                         <div className="font-medium text-sm">{cred.service_name}</div>
-                        <div className="text-xs text-gray-500">
+                        <div className="text-xs text-muted-foreground">
                           {cred.username || 'No username'}
                         </div>
                       </div>
                       <button
                         onClick={() => copyPassword(cred.id)}
-                        className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 transition"
+                        className="flex items-center gap-1 px-3 py-1.5 bg-accent text-white rounded-lg text-xs font-medium hover:bg-accent/90 transition"
                         title="Copy password to clipboard"
                       >
                         {copiedId === cred.id ? (
@@ -1596,10 +1628,10 @@ export default function RepDashboard() {
 
                 {/* Add Credential Form */}
                 {showAddCredential ? (
-                  <div className="p-3 bg-blue-50 rounded-lg border border-blue-200 space-y-2">
+                  <div className="p-3 bg-accent/10 rounded-lg border border-accent/30 space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-blue-800">New Credential</span>
-                      <button onClick={() => setShowAddCredential(false)} className="text-gray-400 hover:text-gray-600">
+                      <span className="text-sm font-medium text-accent">New Credential</span>
+                      <button onClick={() => setShowAddCredential(false)} className="text-muted-foreground/80 hover:text-muted-foreground">
                         <X className="w-4 h-4" />
                       </button>
                     </div>
@@ -1607,24 +1639,24 @@ export default function RepDashboard() {
                       placeholder="Service name (e.g. Amazon)"
                       value={newCred.serviceName}
                       onChange={(e) => setNewCred((p) => ({ ...p, serviceName: e.target.value }))}
-                      className="w-full rounded border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full rounded border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                     />
                     <input
                       placeholder="Username / email (optional)"
                       value={newCred.username}
                       onChange={(e) => setNewCred((p) => ({ ...p, username: e.target.value }))}
-                      className="w-full rounded border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full rounded border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                     />
                     <input
                       type="password"
                       placeholder="Password"
                       value={newCred.password}
                       onChange={(e) => setNewCred((p) => ({ ...p, password: e.target.value }))}
-                      className="w-full rounded border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full rounded border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                     />
                     <button
                       onClick={addCredential}
-                      className="w-full bg-blue-600 text-white rounded py-1.5 text-sm font-medium hover:bg-blue-700 transition"
+                      className="w-full bg-accent text-white rounded py-1.5 text-sm font-medium hover:bg-accent/90 transition"
                     >
                       Save to Vault
                     </button>
@@ -1632,7 +1664,7 @@ export default function RepDashboard() {
                 ) : (
                   <button
                     onClick={() => setShowAddCredential(true)}
-                    className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg border-2 border-dashed border-gray-300 text-sm text-gray-500 hover:border-blue-400 hover:text-blue-600 transition"
+                    className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg border-2 border-dashed border-border text-sm text-muted-foreground hover:border-accent/50 hover:text-accent transition"
                   >
                     <Plus className="w-4 h-4" />
                     Add Credential
@@ -1640,7 +1672,7 @@ export default function RepDashboard() {
                 )}
               </div>
             ) : (
-              <p className="text-sm text-gray-500 text-center py-8">
+              <p className="text-sm text-muted-foreground text-center py-8">
                 {activeCall
                   ? 'No customer identified for this call.'
                   : 'Vault access is only available during an active call.'}

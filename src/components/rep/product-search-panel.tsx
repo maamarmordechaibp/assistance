@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
@@ -99,7 +99,7 @@ export default function ProductSearchPanel({
   }
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border">
+    <div className="bg-card rounded-xl shadow-sm border">
       <div className="px-4 py-3 border-b flex items-center justify-between">
         <h3 className="font-semibold flex items-center gap-2">
           <ShoppingBag className="w-4 h-4" /> Product search
@@ -107,10 +107,10 @@ export default function ProductSearchPanel({
         <button
           type="button"
           onClick={load}
-          className="p-1 rounded hover:bg-gray-100"
+          className="p-1 rounded hover:bg-muted"
           title="Refresh"
         >
-          <RefreshCw className="w-4 h-4 text-gray-500" />
+          <RefreshCw className="w-4 h-4 text-muted-foreground" />
         </button>
       </div>
 
@@ -121,13 +121,13 @@ export default function ProductSearchPanel({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search query (run from the customer browser results page)"
-            className="flex-1 border rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="flex-1 border rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             onKeyDown={(e) => { if (e.key === 'Enter') void scrape(); }}
           />
           <button
             onClick={scrape}
             disabled={scraping}
-            className="px-3 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1"
+            className="px-3 py-1.5 bg-accent text-white rounded text-sm hover:bg-accent/90 disabled:opacity-50 flex items-center gap-1"
           >
             {scraping ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
             Capture
@@ -135,9 +135,9 @@ export default function ProductSearchPanel({
         </div>
 
         {loading ? (
-          <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>
+          <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground/80" /></div>
         ) : searches.length === 0 ? (
-          <div className="text-xs text-gray-500 italic py-2">
+          <div className="text-xs text-muted-foreground italic py-2">
             No captured searches yet. Browse to a results page in the customer browser, type a label here, and click Capture.
           </div>
         ) : (
@@ -146,16 +146,16 @@ export default function ProductSearchPanel({
               <div key={s.id} className="border rounded p-2 text-sm flex items-center gap-3">
                 <div className="flex-1 min-w-0">
                   <div className="font-medium truncate">{s.query || s.site || 'Untitled'}</div>
-                  <div className="text-xs text-gray-500 flex gap-2">
+                  <div className="text-xs text-muted-foreground flex gap-2">
                     <span>{s.options_count} options</span>
                     <span>•</span>
                     <span>{new Date(s.created_at).toLocaleString()}</span>
-                    {s.sent_at && <span className="text-green-600">• Emailed</span>}
+                    {s.sent_at && <span className="text-success">• Emailed</span>}
                   </div>
                 </div>
                 <button
                   onClick={() => openPdf(s)}
-                  className="p-1.5 rounded hover:bg-blue-50 text-blue-600"
+                  className="p-1.5 rounded hover:bg-accent/10 text-accent"
                   title="Open PDF"
                 >
                   <FileText className="w-4 h-4" />
@@ -163,7 +163,7 @@ export default function ProductSearchPanel({
                 <button
                   onClick={() => emailSearch(s)}
                   disabled={!customerEmail || emailing === s.id}
-                  className="p-1.5 rounded hover:bg-blue-50 text-blue-600 disabled:opacity-40"
+                  className="p-1.5 rounded hover:bg-accent/10 text-accent disabled:opacity-40"
                   title={customerEmail ? `Email to ${customerEmail}` : 'No customer email on file'}
                 >
                   {emailing === s.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
