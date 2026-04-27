@@ -1,0 +1,28 @@
+<svg width="220" height="56" viewBox="0 0 220 56" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Icon container -->
+  <rect x="4" y="4" width="48" height="48" rx="14" fill="rgba(255,255,255,0.12)" stroke="rgba(255,255,255,0.18)"/>
+
+  <!-- Helping hands -->
+  <path
+    d="M14 37C16 32 20.5 30 24.5 30H27C29 30 30 31 30 33V36H20.5C18 36 16 36.3 14 37Z"
+    fill="#FFFFFF"
+  />
+  <path
+    d="M42 37C40 32 35.5 30 31.5 30H29C27 30 26 31 26 33V36H35.5C38 36 40 36.3 42 37Z"
+    fill="#FFFFFF"
+  />
+
+  <!-- Phone circle -->
+  <circle cx="28" cy="21" r="9" fill="#FFFFFF"/>
+
+  <!-- Phone handset -->
+  <path
+    d="M25.3 17.9C25.6 17.6 26.1 17.5 26.5 17.7L28.1 18.3C28.7 18.5 29 19.1 28.8 19.7L28.3 20.8C29.1 22.2 30.2 23.3 31.6 24.1L32.7 23.6C33.3 23.4 33.9 23.7 34.1 24.3L34.7 25.9C34.9 26.3 34.8 26.8 34.5 27.1L33.6 28C33.1 28.5 32.3 28.7 31.6 28.5C29.3 27.7 27.2 26.4 25.6 24.8C24 23.2 22.7 21.1 21.9 18.8C21.7 18.1 21.9 17.3 22.4 16.8L23.3 15.9C23.6 15.6 24.1 15.5 24.5 15.7L26.1 16.3C26.7 16.5 27 17.1 26.8 17.7L26.3 18.8C26 18.5 25.7 18.2 25.3 17.9Z"
+    fill="#2C3E50"
+  />
+
+  <!-- Wordmark -->
+  <text x="64" y="31" fill="#FFFFFF" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700" letter-spacing="0.4">
+    Offline
+  </text>
+</svg>

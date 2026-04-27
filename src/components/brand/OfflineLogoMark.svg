@@ -1,0 +1,38 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="offlineMarkBg" x1="20" y1="16" x2="108" y2="112" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E67E22"/>
+      <stop offset="1" stop-color="#D96C0F"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Outer badge -->
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#offlineMarkBg)"/>
+
+  <!-- Support / helping hands -->
+  <path
+    d="M30 82C34 72 44 68 52 68H58C62 68 64 70 64 74V80H46C40 80 35 81 30 82Z"
+    fill="#FFF4E8"
+  />
+  <path
+    d="M98 82C94 72 84 68 76 68H70C66 68 64 70 64 74V80H82C88 80 93 81 98 82Z"
+    fill="#FFF4E8"
+  />
+
+  <!-- Phone circle -->
+  <circle cx="64" cy="50" r="22" fill="#2C3E50"/>
+
+  <!-- Phone handset -->
+  <path
+    d="M56.8 40.8C57.6 40 58.7 39.8 59.7 40.2L63.5 41.8C64.8 42.3 65.4 43.8 64.9 45.1L63.8 47.8C65.6 51.1 68.3 53.8 71.6 55.6L74.3 54.5C75.6 54 77.1 54.6 77.6 55.9L79.2 59.7C79.6 60.7 79.4 61.8 78.6 62.6L76.6 64.6C75.4 65.8 73.6 66.3 71.9 65.8C66.4 64.1 61.6 60.8 57.6 56.8C53.6 52.8 50.3 48 48.6 42.5C48.1 40.8 48.6 39 49.8 37.8L51.8 35.8C52.6 35 53.7 34.8 54.7 35.2L58.5 36.8C59.8 37.3 60.4 38.8 59.9 40.1L58.8 42.8C58.2 42.1 57.5 41.4 56.8 40.8Z"
+    fill="#FFFFFF"
+  />
+
+  <!-- Inner support curve -->
+  <path
+    d="M44 89C49 85 56 83 64 83C72 83 79 85 84 89"
+    stroke="#2C3E50"
+    stroke-width="4"
+    stroke-linecap="round"
+  />
+</svg>

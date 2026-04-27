@@ -140,11 +140,10 @@ export default function Sidebar({ role, userName }: SidebarProps) {
           href={role === 'admin' ? '/admin' : '/rep'}
           className="flex items-center gap-2.5 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <Logo variant="mark" size={28} />
-          {!collapsed && (
-            <span className="text-[15px] font-semibold tracking-tight text-sidebar-foreground">
-              Offline
-            </span>
+          {collapsed ? (
+            <Logo variant="mark" size={32} />
+          ) : (
+            <Logo variant="white" size={32} />
           )}
         </Link>
       </div>
