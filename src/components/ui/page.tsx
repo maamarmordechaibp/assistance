@@ -52,7 +52,17 @@ export interface StatCardProps extends React.HTMLAttributes<HTMLDivElement> {
   icon?: React.ReactNode;
   trend?: "up" | "down" | "neutral";
   trendValue?: React.ReactNode;
+  accent?: "default" | "accent" | "success" | "warning" | "destructive";
+  loading?: boolean;
 }
+
+const accentTone: Record<NonNullable<StatCardProps["accent"]>, string> = {
+  default: "bg-muted/60 text-muted-foreground",
+  accent: "bg-accent/15 text-accent",
+  success: "bg-success/15 text-success",
+  warning: "bg-warning/15 text-warning",
+  destructive: "bg-destructive/15 text-destructive",
+};
 
 export function StatCard({
   label,
@@ -61,6 +71,8 @@ export function StatCard({
   icon,
   trend,
   trendValue,
+  accent = "default",
+  loading,
   className,
   ...props
 }: StatCardProps) {
@@ -71,10 +83,14 @@ export function StatCard({
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             {label}
           </p>
-          <p className="mt-1 text-2xl font-semibold tracking-tight text-foreground">
-            {value}
-          </p>
-          {(hint || trendValue) && (
+          {loading ? (
+            <div className="mt-2 h-7 w-20 rounded-md bg-muted animate-pulse" />
+          ) : (
+            <p className="mt-1 text-2xl font-semibold tracking-tight text-foreground">
+              {value}
+            </p>
+          )}
+          {(hint || trendValue) && !loading && (
             <p
               className={cn(
                 "mt-1 text-xs",
@@ -90,7 +106,12 @@ export function StatCard({
           )}
         </div>
         {icon && (
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground [&_svg]:size-4">
+          <div
+            className={cn(
+              "flex size-9 shrink-0 items-center justify-center rounded-lg [&_svg]:size-4",
+              accentTone[accent],
+            )}
+          >
             {icon}
           </div>
         )}
