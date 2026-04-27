@@ -170,13 +170,13 @@ export default function Sidebar({ role, userName }: SidebarProps) {
                         'group relative flex items-center gap-3 rounded-md text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
                         collapsed ? 'h-10 w-full justify-center px-0' : 'h-9 px-2.5',
                         active
-                          ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+                          ? 'bg-accent/15 text-accent'
                           : 'text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground'
                       )}
                     >
                       {active && (
                         <span
-                          className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-accent"
+                          className="absolute left-0 top-1 bottom-1 w-1 rounded-r-full bg-accent"
                           aria-hidden
                         />
                       )}

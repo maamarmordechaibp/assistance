@@ -28,22 +28,31 @@ export function Logo({ className, size = 28, variant = 'full', flat = false }: L
         <>
           <defs>
             <linearGradient id="offline-grad" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stopColor="#3b82f6" />
-              <stop offset="100%" stopColor="#1e3a8a" />
+              <stop offset="0%" stopColor="#34495E" />
+              <stop offset="100%" stopColor="#2C3E50" />
             </linearGradient>
           </defs>
           <rect width="64" height="64" rx="14" fill="url(#offline-grad)" />
-          <circle cx="32" cy="32" r="18" fill="none" stroke="#fff" strokeWidth="3.5" opacity="0.95" />
-          <circle cx="32" cy="32" r="9" fill="none" stroke="#fff" strokeWidth="3.5" opacity="0.65" />
-          <circle cx="32" cy="32" r="2.6" fill="#fff" />
+          {/* helping hands cradling a glow */}
+          <g fill="none" stroke="#FFFFFF" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round" opacity="0.95">
+            <path d="M16 36c0-9.5 5.5-15 13-15 3.6 0 5.5 1.8 5.5 4.5v8.5" />
+            <path d="M16 36c0 7.5 5.5 11.5 11.5 11.5h5" />
+            <path d="M48 36c0-9.5-5.5-15-13-15-3.6 0-5.5 1.8-5.5 4.5v8.5" />
+            <path d="M48 36c0 7.5-5.5 11.5-11.5 11.5h-5" />
+          </g>
+          {/* terracotta spark */}
+          <circle cx="32" cy="30" r="3.4" fill="#E67E22" />
+          <circle cx="32" cy="30" r="6.5" fill="none" stroke="#E67E22" strokeWidth="1.5" opacity="0.6" />
         </>
       )}
       {flat && (
-        <>
-          <circle cx="32" cy="32" r="22" fill="none" stroke="currentColor" strokeWidth="4" />
-          <circle cx="32" cy="32" r="11" fill="none" stroke="currentColor" strokeWidth="4" opacity="0.6" />
-          <circle cx="32" cy="32" r="3.2" fill="currentColor" />
-        </>
+        <g fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M14 36c0-10 6-16 14-16 4 0 6 2 6 5v9" />
+          <path d="M14 36c0 8 6 12 12 12h6" />
+          <path d="M50 36c0-10-6-16-14-16-4 0-6 2-6 5v9" />
+          <path d="M50 36c0 8-6 12-12 12h-6" />
+          <circle cx="32" cy="30" r="3" fill="currentColor" stroke="none" />
+        </g>
       )}
     </svg>
   );

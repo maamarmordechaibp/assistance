@@ -2,88 +2,88 @@
 
 /*
  * Offline — Design System
- * Slate / navy enterprise palette. Class-based dark mode.
+ * Navy + Terracotta brand palette. Class-based dark mode.
  */
 
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
   /* Surfaces */
-  --background: 210 20% 98%;
-  --foreground: 222 47% 11%;
+  --background: 210 17% 98%;        /* #F8F9FA */
+  --foreground: 210 29% 24%;        /* #2C3E50 navy */
   --card: 0 0% 100%;
-  --card-foreground: 222 47% 11%;
+  --card-foreground: 210 29% 24%;
   --popover: 0 0% 100%;
-  --popover-foreground: 222 47% 11%;
+  --popover-foreground: 210 29% 24%;
 
   /* Brand */
-  --primary: 222 47% 20%;          /* deep navy */
-  --primary-foreground: 210 20% 98%;
-  --accent: 217 91% 60%;           /* electric blue */
+  --primary: 210 29% 24%;           /* navy #2C3E50 */
+  --primary-foreground: 0 0% 100%;
+  --accent: 28 80% 52%;             /* terracotta #E67E22 */
   --accent-foreground: 0 0% 100%;
 
   /* Neutrals */
-  --secondary: 210 16% 93%;
-  --secondary-foreground: 222 47% 11%;
-  --muted: 210 16% 95%;
-  --muted-foreground: 215 16% 40%;
-  --border: 214 20% 88%;
-  --input: 214 20% 88%;
-  --ring: 217 91% 60%;
+  --secondary: 192 15% 94%;         /* #ECF0F1 */
+  --secondary-foreground: 210 29% 24%;
+  --muted: 210 17% 96%;
+  --muted-foreground: 184 8% 53%;   /* #7F8C8D */
+  --border: 204 17% 90%;            /* #E1E8ED */
+  --input: 204 17% 90%;
+  --ring: 28 80% 52%;               /* terracotta */
 
   /* Status */
-  --success: 152 60% 36%;
+  --success: 145 63% 42%;           /* #27AE60 */
   --success-foreground: 0 0% 100%;
-  --warning: 35 92% 50%;
+  --warning: 37 90% 51%;            /* #F39C12 */
   --warning-foreground: 0 0% 100%;
-  --destructive: 0 72% 51%;
+  --destructive: 6 78% 57%;         /* #E74C3C */
   --destructive-foreground: 0 0% 100%;
-  --info: 217 91% 60%;
+  --info: 204 70% 53%;              /* #3498DB */
   --info-foreground: 0 0% 100%;
 
-  /* Sidebar — always dark navy for contrast in light mode */
-  --sidebar: 222 47% 11%;
-  --sidebar-foreground: 210 20% 92%;
-  --sidebar-muted: 215 20% 65%;
-  --sidebar-border: 222 30% 18%;
-  --sidebar-accent: 222 30% 18%;
-  --sidebar-accent-foreground: 210 20% 98%;
+  /* Sidebar — navy with terracotta accents */
+  --sidebar: 210 29% 24%;           /* #2C3E50 */
+  --sidebar-foreground: 0 0% 100%;
+  --sidebar-muted: 184 9% 62%;      /* #95A5A6 */
+  --sidebar-border: 210 29% 29%;    /* #34495E */
+  --sidebar-accent: 210 29% 29%;    /* hover bg */
+  --sidebar-accent-foreground: 0 0% 100%;
 
-  --radius: 0.625rem;
+  --radius: 0.5rem;                 /* 8px per spec */
 }
 
 .dark {
-  --background: 222 47% 5%;
-  --foreground: 210 20% 96%;
-  --card: 222 40% 8%;
-  --card-foreground: 210 20% 96%;
-  --popover: 222 40% 8%;
-  --popover-foreground: 210 20% 96%;
+  --background: 210 30% 7%;
+  --foreground: 210 17% 96%;
+  --card: 210 28% 11%;
+  --card-foreground: 210 17% 96%;
+  --popover: 210 28% 11%;
+  --popover-foreground: 210 17% 96%;
 
-  --primary: 217 91% 60%;
-  --primary-foreground: 222 47% 5%;
-  --accent: 217 91% 60%;
-  --accent-foreground: 222 47% 5%;
+  --primary: 28 80% 52%;
+  --primary-foreground: 210 30% 7%;
+  --accent: 28 85% 58%;
+  --accent-foreground: 210 30% 7%;
 
-  --secondary: 222 30% 14%;
-  --secondary-foreground: 210 20% 96%;
-  --muted: 222 30% 12%;
-  --muted-foreground: 215 16% 60%;
-  --border: 222 30% 16%;
-  --input: 222 30% 16%;
-  --ring: 217 91% 60%;
+  --secondary: 210 25% 16%;
+  --secondary-foreground: 210 17% 96%;
+  --muted: 210 25% 14%;
+  --muted-foreground: 184 9% 65%;
+  --border: 210 25% 18%;
+  --input: 210 25% 18%;
+  --ring: 28 80% 58%;
 
-  --success: 152 60% 44%;
-  --warning: 35 92% 56%;
-  --destructive: 0 72% 58%;
-  --info: 217 91% 60%;
+  --success: 145 55% 50%;
+  --warning: 37 90% 58%;
+  --destructive: 6 78% 62%;
+  --info: 204 70% 60%;
 
-  --sidebar: 222 47% 4%;
-  --sidebar-foreground: 210 20% 88%;
-  --sidebar-muted: 215 16% 55%;
-  --sidebar-border: 222 30% 12%;
-  --sidebar-accent: 222 30% 12%;
-  --sidebar-accent-foreground: 210 20% 96%;
+  --sidebar: 210 35% 6%;
+  --sidebar-foreground: 210 17% 92%;
+  --sidebar-muted: 184 9% 60%;
+  --sidebar-border: 210 30% 12%;
+  --sidebar-accent: 210 30% 14%;
+  --sidebar-accent-foreground: 210 17% 96%;
 }
 
 @theme inline {

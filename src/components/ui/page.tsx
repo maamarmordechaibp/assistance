@@ -108,7 +108,7 @@ export function StatCard({
         {icon && (
           <div
             className={cn(
-              "flex size-9 shrink-0 items-center justify-center rounded-lg [&_svg]:size-4",
+              "flex size-12 shrink-0 items-center justify-center rounded-full [&_svg]:size-5",
               accentTone[accent],
             )}
           >
@@ -138,7 +138,7 @@ export function EmptyState({
   return (
     <div
       className={cn(
-        "flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-card/40 p-10 text-center",
+        "flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border bg-card/40 p-10 text-center",
         className,
       )}
       {...props}
