@@ -7,6 +7,93 @@ import { enqueueCaller } from '../_shared/callQueue.ts';
 import { getSubscriberAddressPath } from '../_shared/signalwire.ts';
 import { promptLines } from '../_shared/promptStore.ts';
 
+/**
+ * Insert a `pending` callback_requests row for a caller who hung up before a
+ * rep ever bridged. Idempotent — relies on the partial UNIQUE index on
+ * `call_sid` (uniq_callback_requests_call_sid) so re-firing webhooks for the
+ * same SignalWire CallSid don't create duplicates.
+ *
+ * Resolves the customer (if any) by phone-number variants — the same logic
+ * the inbound matcher uses, so a known caller's row is linked to the existing
+ * customer instead of an unrelated stub.
+ */
+async function createAbandonedCallback(
+  supabase: ReturnType<typeof createServiceClient>,
+  args: { callSid: string; from: string | null; queueId?: string | null },
+): Promise<void> {
+  const { callSid, from, queueId } = args;
+  if (!callSid) return;
+  try {
+    // Build the same E.164 / digit variants used in the inbound lookup so we
+    // attach to the original customer row rather than the bogus auto-stub.
+    const fromStr = from || '';
+    const fromDigits = fromStr.replace(/[^0-9]/g, '');
+    const variants = new Set<string>([fromStr]);
+    if (fromDigits.length === 11 && fromDigits.startsWith('1')) {
+      variants.add(`+${fromDigits}`);
+      variants.add(fromDigits);
+      variants.add(fromDigits.slice(1));
+      variants.add(`+1${fromDigits.slice(1)}`);
+    } else if (fromDigits.length === 10) {
+      variants.add(fromDigits);
+      variants.add(`+1${fromDigits}`);
+      variants.add(`1${fromDigits}`);
+      variants.add(`+${fromDigits}`);
+    }
+    const variantsList = Array.from(variants).filter((v) => v.length > 0);
+
+    let customerId: string | null = null;
+    let callerName: string | null = null;
+    if (variantsList.length > 0) {
+      const { data: cust } = await supabase
+        .from('customers')
+        .select('id, full_name')
+        .in('primary_phone', variantsList)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (cust) {
+        customerId = cust.id;
+        callerName = cust.full_name;
+      }
+    }
+
+    // Prefer caller_name from call_queue if available (it captured a friendlier
+    // name when the queue was entered).
+    if (!callerName && queueId) {
+      const { data: q } = await supabase
+        .from('call_queue')
+        .select('caller_name')
+        .eq('id', queueId)
+        .maybeSingle();
+      if (q?.caller_name) callerName = q.caller_name;
+    }
+
+    const e164 = fromDigits.length === 10
+      ? `+1${fromDigits}`
+      : fromDigits.length === 11 && fromDigits.startsWith('1')
+        ? `+${fromDigits}`
+        : (fromStr || null);
+    if (!e164) return;
+
+    await supabase
+      .from('callback_requests')
+      .upsert(
+        {
+          phone_number: e164,
+          customer_id: customerId,
+          caller_name: callerName,
+          call_sid: callSid,
+          is_general: true,
+          status: 'pending',
+        },
+        { onConflict: 'call_sid', ignoreDuplicates: true },
+      );
+  } catch (err) {
+    console.error('[sw-inbound] createAbandonedCallback failed:', err);
+  }
+}
+
 serve(async (req) => {
   if (req.method !== 'POST') {
     return new Response('Method not allowed', { status: 405 });
@@ -50,6 +137,7 @@ serve(async (req) => {
     // 'redirected' means we REST-updated the call to dial the rep via
     // connect-claimed-rep — that handler owns the row, don't touch it.
     // 'bridged' is the legacy <Dial><Queue> flow.
+    const isAbandoned = queueResult !== 'redirected' && queueResult !== 'bridged';
     if (queueId && queueResult !== 'redirected') {
       const finalStatus = queueResult === 'bridged' ? 'completed' : 'abandoned';
       await supabase
@@ -64,6 +152,23 @@ serve(async (req) => {
         .eq('status', 'waiting')
         .then(() => {})
         .catch(() => {});
+    }
+    // Auto-create a callback for callers who hung up before a rep picked up.
+    // Idempotent via uniq_callback_requests_call_sid (PG unique partial index).
+    if (isAbandoned && callSid) {
+      await createAbandonedCallback(supabase, { callSid, from, queueId });
+    }
+    return new Response(laml.buildLamlResponse([laml.hangup()]), { headers: { 'Content-Type': 'application/xml' } });
+  }
+
+  // ── Claimed-rep dial fallback: rep was claimed and we Update-Call'd them
+  //    into a <Dial><Sip|Number>, but the rep didn't answer (call hit timeout
+  //    or busy). Without this step the caller would just hangup and vanish;
+  //    instead we record an abandoned-call callback and end the call. ──
+  if (step === 'claimed-rep-fallback') {
+    const dialCallStatus = formData.get('DialCallStatus') as string | null;
+    if (dialCallStatus !== 'completed' && callSid) {
+      await createAbandonedCallback(supabase, { callSid, from });
     }
     return new Response(laml.buildLamlResponse([laml.hangup()]), { headers: { 'Content-Type': 'application/xml' } });
   }
@@ -107,6 +212,9 @@ serve(async (req) => {
       timeout: 30,
       timeLimit: 14400,
       record: true,
+      // If the claimed rep doesn't answer, return through claimed-rep-fallback
+      // so we record an abandoned-call callback before hanging up.
+      action: `${baseUrl}/sw-inbound?step=claimed-rep-fallback`,
     }) : null;
 
     if (!dialXml) {
@@ -461,6 +569,10 @@ serve(async (req) => {
 
       case '4': // Yiddish admin office voicemail
         elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=voicemail-yiddish&customerId=${customerId}`));
+        break;
+
+      case '5': // Order status (tracking)
+        elements.push(laml.redirect(`${baseUrl}/sw-order-status?step=intro&customerId=${customerId}`));
         break;
 
       case '7': // Terms & security submenu
@@ -840,16 +952,30 @@ serve(async (req) => {
     phoneVariants.add(`+${fromDigits}`);
   }
   const variantsList = Array.from(phoneVariants);
-  const orFilter = variantsList
-    .flatMap(v => [`primary_phone.eq.${v}`, `secondary_phone.eq.${v}`])
-    .join(',');
+  // NOTE: do NOT use `.or('primary_phone.eq.+1...')` here — PostgREST does not
+  // URL-encode values inside an .or() expression, so the literal `+` in an
+  // E.164 number gets decoded as a space and the row is never matched. That
+  // bug caused a brand-new "Caller +1…" customer to be created on every call.
+  // `.in()` properly encodes its values, so we run two safe lookups instead.
   let { data: customer } = await supabase
     .from('customers')
     .select('*')
-    .or(orFilter)
+    .in('primary_phone', variantsList)
     .eq('status', 'active')
+    .order('created_at', { ascending: true })
     .limit(1)
     .maybeSingle();
+  if (!customer) {
+    const { data: secMatch } = await supabase
+      .from('customers')
+      .select('*')
+      .in('secondary_phone', variantsList)
+      .eq('status', 'active')
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    customer = secMatch ?? null;
+  }
 
   if (!customer) {
     // Always store new customers in E.164 so future lookups are deterministic.
@@ -948,6 +1074,18 @@ serve(async (req) => {
       // Returning-caller fast-path: greet + "press 1 for rep" all
       // inside one <Gather> so any digit barge-in jumps straight to menu.
       const sayLines = [...greetingLines];
+
+      // If the customer has any open orders, mention the tracking shortcut
+      // so they can skip straight to it without listening to the full menu.
+      const { count: openOrdersCount } = await supabase
+        .from('orders')
+        .select('id', { count: 'exact', head: true })
+        .eq('customer_id', customer.id)
+        .in('status', ['placed', 'paid', 'shipped']);
+      if ((openOrdersCount ?? 0) > 0) {
+        sayLines.push('To track an open order, press 5.');
+      }
+
       sayLines.push('Press 0 to speak with a representative right now, or stay on the line for more options.');
       elements.push(
         laml.gather(

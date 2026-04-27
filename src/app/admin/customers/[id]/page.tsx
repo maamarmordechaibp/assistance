@@ -18,6 +18,8 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { edgeFn } from '@/lib/supabase/edge';
+import OrdersPanel from '@/components/rep/orders-panel';
+import BrowserLockBadge from '@/components/rep/browser-lock-badge';
 
 interface Customer {
   id: string;
@@ -145,6 +147,9 @@ export default function AdminCustomerDetail() {
         >
           {customer.status}
         </span>
+        <div className="ml-auto">
+          <BrowserLockBadge customerId={customer.id} isAdmin />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -352,6 +357,9 @@ export default function AdminCustomerDetail() {
           </tbody>
         </table>
       </div>
+
+      {/* Orders & Tracking */}
+      <OrdersPanel customerId={customer.id} />
     </div>
   );
 }

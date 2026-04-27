@@ -44,13 +44,29 @@ serve(async (req) => {
     else if (phone.length === 11 && phone.startsWith('1')) phone = `+${phone}`;
     else phone = `+${phone}`;
 
-    // Look up customer by entered phone number
-    const { data: customer } = await supabase
+    // Look up customer by entered phone number.
+    // Avoid `.or()` here: PostgREST does not URL-encode values inside an .or()
+    // expression, so the literal `+` in an E.164 number is decoded as a space
+    // and never matches. `.eq()` properly encodes its argument.
+    let { data: customer } = await supabase
       .from('customers')
       .select('id, full_name, current_balance_minutes')
-      .or(`primary_phone.eq.${phone},secondary_phone.eq.${phone}`)
+      .eq('primary_phone', phone)
       .eq('status', 'active')
-      .single();
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (!customer) {
+      const { data: secMatch } = await supabase
+        .from('customers')
+        .select('id, full_name, current_balance_minutes')
+        .eq('secondary_phone', phone)
+        .eq('status', 'active')
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      customer = secMatch ?? null;
+    }
 
     if (customer) {
       // Update the call record to link to the found customer

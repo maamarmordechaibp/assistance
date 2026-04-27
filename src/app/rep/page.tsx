@@ -6,6 +6,8 @@ import { formatMinutes, formatDuration, formatPhone } from '@/lib/utils';
 import { toast } from 'sonner';
 import Softphone from '@/components/softphone/softphone';
 import ProductSearchPanel from '@/components/rep/product-search-panel';
+import OrdersPanel from '@/components/rep/orders-panel';
+import BrowserLockBadge from '@/components/rep/browser-lock-badge';
 import {
   Phone,
   PhoneOff,
@@ -650,16 +652,46 @@ export default function RepDashboard() {
 
   // Local launcher (rep's PC): opens real Chrome windows in per-customer profiles.
   // Requires the rep to install tools/offline-browser-launcher (one-time).
+  // v2: when a customerId is supplied, the launcher syncs the shared profile
+  //     (cookies/logins) from Supabase, holds an exclusive lock while Chrome
+  //     is open, and uploads the new state on exit. Falls back to a legacy
+  //     local-only profile when only `profile` is given (rep's own browser).
   const LAUNCHER_URL = 'http://localhost:17345';
-  const openLocalChrome = async (profile: string, url: string, label: string) => {
+  const openLocalChrome = async (
+    profileOrCustomerId: string,
+    url: string,
+    label: string,
+    opts?: { customerId?: string },
+  ) => {
+    const customerId = opts?.customerId;
     try {
+      let payload: Record<string, unknown>;
+      if (customerId) {
+        const { data: { session } } = await supabase.auth.getSession();
+        const authToken = session?.access_token;
+        if (!authToken) throw new Error('Not signed in');
+        const fnBase = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1`;
+        payload = { customerId, authToken, functionsBaseUrl: fnBase, url };
+      } else {
+        payload = { profile: profileOrCustomerId, url };
+      }
       const res = await fetch(`${LAUNCHER_URL}/open`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ profile, url }),
+        body: JSON.stringify(payload),
       });
+      if (res.status === 409) {
+        const data = await res.json().catch(() => ({}));
+        toast.error(`Customer browser is already open by another rep. ${data.detail || ''}`, { duration: 9000 });
+        return;
+      }
       if (!res.ok) throw new Error(`launcher returned ${res.status}`);
-      toast.success(`Opened Chrome — ${label}`);
+      const data = await res.json().catch(() => ({}));
+      toast.success(
+        customerId && data.restored
+          ? `Opened Chrome — ${label} (restored saved login session)`
+          : `Opened Chrome — ${label}`,
+      );
     } catch (err) {
       toast.error('Local browser launcher not running. Install it from tools/offline-browser-launcher.', {
         description: String((err as Error).message || err),
@@ -1238,6 +1270,12 @@ export default function RepDashboard() {
             />
           )}
 
+          {/* Orders & tracking — visible on every active call so the rep can
+              log a purchase and paste tracking the moment Amazon confirms. */}
+          {activeCall && customer && (
+            <OrdersPanel customerId={customer.id} callId={activeCall.id} />
+          )}
+
           {/* Customer Browser (Browserbase) — only visible while on a call */}
           {activeCall && customer && (
             <div className={`bg-white rounded-xl shadow-sm border ${bbFullscreen ? 'fixed inset-0 z-50 flex flex-col p-3 rounded-none' : 'p-4'}`}>
@@ -1299,12 +1337,13 @@ export default function RepDashboard() {
               {!bbLiveUrl ? (
                 <div className="space-y-2">
                   <button
-                    onClick={() => openLocalChrome(`customer-${customer.id}`, 'https://www.google.com', `${customer.full_name}'s profile`)}
+                    onClick={() => openLocalChrome(customer.id, 'https://www.google.com', `${customer.full_name}'s profile`, { customerId: customer.id })}
                     className="w-full flex items-center justify-center gap-2 py-3 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition"
                   >
                     <ExternalLink className="w-4 h-4" />
                     Open Chrome — {customer.full_name}&apos;s profile
                   </button>
+                  <BrowserLockBadge customerId={customer.id} />
                 </div>
               ) : (
                 <div className={`flex flex-col ${bbFullscreen ? 'flex-1 min-h-0' : ''}`}>

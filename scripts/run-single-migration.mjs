@@ -21,7 +21,7 @@ async function tryConnect(connStr) {
   return c;
 }
 
-const pooler = `postgresql://postgres.rrwgjrixvlyuxjijnavx:${process.env.SUPABASE_DB_PASSWORD}@aws-0-us-east-1.pooler.supabase.com:6543/postgres`;
+const pooler = `postgresql://postgres.rrwgjrixvlyuxjijnavx:${process.env.SUPABASE_DB_PASSWORD}@aws-0-us-east-2.pooler.supabase.com:6543/postgres`;
 const direct = `postgresql://postgres:${process.env.SUPABASE_DB_PASSWORD}@db.rrwgjrixvlyuxjijnavx.supabase.co:5432/postgres`;
 
 let client;
@@ -29,7 +29,7 @@ try {
   client = await tryConnect(pooler);
   console.log('Connected (pooler)');
 } catch (e) {
-  console.log('Pooler failed, trying direct...');
+  console.log('Pooler failed:', e.message, '- trying direct...');
   client = await tryConnect(direct);
   console.log('Connected (direct)');
 }

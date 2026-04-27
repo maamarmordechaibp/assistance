@@ -11,6 +11,7 @@ serve(async (req) => {
   const formData = await req.formData();
   const digits = formData.get('Digits') as string;
   const from = formData.get('From') as string;
+  const callSid = formData.get('CallSid') as string | null;
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const baseUrl = `${supabaseUrl}/functions/v1`;
@@ -19,16 +20,39 @@ serve(async (req) => {
   if (digits === '1') {
     const supabase = createServiceClient();
 
-    const { data: customer } = await supabase
+    // Avoid `.or()` here: PostgREST does not URL-encode values inside an
+    // .or() expression, so the literal `+` in an E.164 number is decoded as
+    // a space and never matches.
+    let { data: customer } = await supabase
       .from('customers')
-      .select('id')
-      .or(`primary_phone.eq.${from},secondary_phone.eq.${from}`)
-      .single();
+      .select('id, full_name')
+      .eq('primary_phone', from)
+      .limit(1)
+      .maybeSingle();
+    if (!customer) {
+      const { data: secMatch } = await supabase
+        .from('customers')
+        .select('id, full_name')
+        .eq('secondary_phone', from)
+        .limit(1)
+        .maybeSingle();
+      customer = secMatch ?? null;
+    }
 
-    await supabase.from('callback_requests').insert({
-      phone_number: from,
-      customer_id: customer?.id || null,
-    });
+    // Upsert by call_sid so a duplicate webhook can't create two rows, and
+    // so an explicit DTMF-1 request takes precedence over any auto-callback
+    // that queue-exit might insert later for the same call.
+    await supabase.from('callback_requests').upsert(
+      {
+        phone_number: from,
+        customer_id: customer?.id || null,
+        caller_name: customer?.full_name || null,
+        call_sid: callSid,
+        is_general: true,
+        status: 'pending',
+      },
+      { onConflict: 'call_sid', ignoreDuplicates: false },
+    );
 
     elements.push(laml.say('Thank you. We have saved your callback request. A representative will call you back as soon as possible. Goodbye.'));
     elements.push(laml.hangup());
