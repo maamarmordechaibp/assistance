@@ -145,6 +145,37 @@ async function fetchInboundFromResend(
   );
 }
 
+// List endpoints often omit body fields. Fetch each message individually so
+// we have `to`, `from`, `text`, `html`, etc. Falls back to the list item if
+// the per-id endpoint fails.
+async function hydrateItem(
+  resendKey: string,
+  item: ResendInbound,
+): Promise<ResendInbound> {
+  const id = item.id || item.email_id;
+  if (!id) return item;
+  // Already populated — skip extra round-trip.
+  if (item.to && item.from) return item;
+  const candidates = [
+    `https://api.resend.com/emails/${id}`,
+    `https://api.resend.com/emails/inbound/${id}`,
+    `https://api.resend.com/inbound/emails/${id}`,
+  ];
+  for (const url of candidates) {
+    try {
+      const r = await fetch(url, {
+        headers: { Authorization: `Bearer ${resendKey}`, Accept: 'application/json' },
+      });
+      if (!r.ok) continue;
+      const detail = (await r.json()) as ResendInbound;
+      return { ...item, ...detail };
+    } catch {
+      // try next
+    }
+  }
+  return item;
+}
+
 serve(async (req) => {
   const cors = handleCors(req);
   if (cors) return cors;
@@ -206,16 +237,21 @@ serve(async (req) => {
   let skipped = 0;
   const errors: string[] = [];
 
-  for (const item of inbound.items) {
+  for (const raw of inbound.items) {
     try {
-      if (since && item.created_at && new Date(item.created_at) < new Date(since)) {
+      if (since && raw.created_at && new Date(raw.created_at) < new Date(since)) {
         skipped++;
         continue;
       }
+      const item = await hydrateItem(resendKey, raw);
       const to = asArray(item.to);
-      const mailbox = to[0];
+      // If `to` is missing, fall back to `from` so we can still record the
+      // message — better than silently skipping. The customer lookup below
+      // will simply not find a match and we'll store with customer_id=null.
+      const mailbox = to[0] || lowerEmail(item.from) || null;
       if (!mailbox) {
         skipped++;
+        errors.push(`${item.id || '(no id)'}: no recipient or sender address`);
         continue;
       }
       const eventId = item.id || item.email_id || null;
@@ -294,6 +330,7 @@ serve(async (req) => {
       updated,
       skipped,
       errors: errors.slice(0, 10),
+      sample: inbound.items.slice(0, 1),
     }),
     { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
   );

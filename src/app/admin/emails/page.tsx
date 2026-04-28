@@ -26,9 +26,17 @@ export default function AdminEmailsPage() {
         });
         return;
       }
+      const skippedNote = json.skipped
+        ? ` (${json.skipped} skipped${json.errors?.[0] ? `: ${json.errors[0]}` : ''})`
+        : '';
       toast.success(
-        `Pulled ${json.fetched} from Resend — ${json.inserted} new, ${json.updated} updated`,
+        `Pulled ${json.fetched} from Resend — ${json.inserted} new, ${json.updated} updated${skippedNote}`,
+        { duration: 10000 },
       );
+      if (json.skipped && !json.inserted && !json.updated) {
+        // eslint-disable-next-line no-console
+        console.log('[email-resync] response', json);
+      }
       setRefreshKey((k) => k + 1);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Resync failed');

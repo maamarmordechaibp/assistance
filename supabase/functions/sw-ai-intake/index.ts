@@ -12,7 +12,6 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
 import * as laml from '../_shared/laml.ts';
-import { enqueueCaller } from '../_shared/callQueue.ts';
 
 // Conversation budget: opening question + at most ONE follow-up = 2 questions total.
 // turn 0 = play greeting + ask Q1.
@@ -118,7 +117,6 @@ serve(async (req) => {
 
   const formData = await req.formData();
   const callSid = formData.get('CallSid') as string;
-  const fromNumber = (formData.get('From') as string) || '';
   const speechResult = ((formData.get('SpeechResult') as string) || '').trim();
   const confidence  = parseFloat((formData.get('Confidence') as string) || '1');
 
@@ -164,12 +162,7 @@ serve(async (req) => {
     return btoa(unescape(encodeURIComponent(JSON.stringify(msgs))));
   }
 
-  // ── Helper: save brief to calls, speak confirmation, then enqueue the
-  //    caller INLINE (no cross-function <Redirect>). We previously redirected
-  //    to sw-inbound?step=connect-rep but observed SignalWire would speak the
-  //    confirmation and then drop the call without following the redirect.
-  //    Emitting the recording-disclosure + <Enqueue> directly here is the
-  //    most reliable handoff. ──
+  // ── Helper: save brief to calls, speak confirmation, redirect to connect-rep ──
   async function transferToRep(brief: unknown, spokenConfirmation?: string): Promise<Response> {
     if (brief !== null && customerId) {
       await supabase
@@ -178,70 +171,17 @@ serve(async (req) => {
         .eq('call_sid', callSid);
     }
     const category = (brief as { category?: string })?.category || '';
+    const connectUrl = `${baseUrl}/sw-inbound?step=connect-rep&customerId=${customerId}${category ? `&category=${encodeURIComponent(category)}` : ''}`;
     const confirmation = (spokenConfirmation && spokenConfirmation.trim().length > 0)
       ? spokenConfirmation.trim()
       : 'Thank you. Connecting you to a representative now.';
-
-    // ── Balance gate (mirrors sw-inbound?step=connect-rep) ──
-    if (customerId) {
-      const { data: cust } = await supabase
-        .from('customers')
-        .select('id, current_balance_minutes, total_minutes_purchased')
-        .eq('id', customerId)
-        .maybeSingle();
-      const { data: gateSetting } = await supabase
-        .from('admin_settings')
-        .select('value')
-        .eq('key', 'first_time_zero_balance')
-        .maybeSingle();
-      const gateMode = String(gateSetting?.value ?? 'warn');
-      const minutes = cust?.current_balance_minutes ?? 0;
-      const hasEverPurchased = (cust?.total_minutes_purchased ?? 0) > 0;
-      if (minutes <= 0 && gateMode === 'block') {
-        const xml = laml.buildLamlResponse([
-          laml.say(confirmation),
-          laml.say(hasEverPurchased
-            ? 'Your account has no minutes remaining. Please add minutes to continue.'
-            : "To speak with a representative you will need an active minutes package. Let's get you set up."),
-          laml.redirect(`${baseUrl}/sw-inbound?step=balance-menu&customerId=${customerId}`),
-        ]);
-        console.log('[sw-ai-intake] transferToRep balance-gate XML:\n' + xml);
-        return new Response(xml, { headers: { 'Content-Type': 'application/xml' } });
-      }
-    }
-
-    // ── Specialty-matched rep lookup (informational only — caller is parked
-    //    in the general queue regardless and any rep can claim them). ──
-    let repsAvailable = 0;
-    if (category) {
-      const { data: specialists } = await supabase
-        .from('reps')
-        .select('id')
-        .eq('status', 'available')
-        .contains('specialties', [category]);
-      repsAvailable = specialists?.length ?? 0;
-    }
-    if (repsAvailable === 0) {
-      const { data: anyReps } = await supabase
-        .from('reps')
-        .select('id')
-        .eq('status', 'available');
-      repsAvailable = anyReps?.length ?? 0;
-    }
-
-    const elements: string[] = [
-      laml.say(confirmation),
-      laml.pause(1),
-      laml.say('This call may be recorded for quality assurance and training purposes.'),
-      laml.pause(1),
-      laml.say(repsAvailable > 0
-        ? 'Connecting you to the next available representative. Please hold.'
-        : 'All representatives are currently busy. Please hold.'),
-      await enqueueCaller({ callSid, from: fromNumber, customerId, baseUrl }),
-    ];
-    const xml = laml.buildLamlResponse(elements);
-    console.log(`[sw-ai-intake] transferToRep enqueue category=${category} repsAvailable=${repsAvailable} XML:\n${xml}`);
-    return new Response(xml, { headers: { 'Content-Type': 'application/xml' } });
+    return new Response(
+      laml.buildLamlResponse([
+        laml.say(confirmation),
+        laml.redirect(connectUrl),
+      ]),
+      { headers: { 'Content-Type': 'application/xml' } }
+    );
   }
 
   // ── Helper: run one conversational turn — GPT returns either a follow-up
