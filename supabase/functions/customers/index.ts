@@ -75,6 +75,7 @@ serve(async (req) => {
     if (updates.internalNotes !== undefined) dbUpdates.internal_notes = updates.internalNotes;
     if (updates.status !== undefined) dbUpdates.status = updates.status;
     if (updates.preferredRepId !== undefined) dbUpdates.preferred_rep_id = updates.preferredRepId || null;
+    if (updates.personalEmail !== undefined) dbUpdates.personal_email = updates.personalEmail || null;
 
     const { data, error } = await supabase.from('customers').update(dbUpdates).eq('id', id).select().single();
     if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });

@@ -166,6 +166,24 @@ export async function ingestEmailAsOrder(
     await svc.from('orders').update({ status: target }).eq('id', orderId);
   }
 
+  // If the email is from a real merchant and the customer has a personal
+  // email on file but no forwarding stamp yet, mark forwarding as verified.
+  // This runs after a successful order/shipment ingest so we know the
+  // forwarding chain actually delivered something useful.
+  if (plan.merchant) {
+    const { data: cust } = await svc
+      .from('customers')
+      .select('personal_email, forwarding_verified_at')
+      .eq('id', email.customer_id)
+      .maybeSingle();
+    if (cust?.personal_email && !cust.forwarding_verified_at) {
+      await svc
+        .from('customers')
+        .update({ forwarding_verified_at: new Date().toISOString() })
+        .eq('id', email.customer_id);
+    }
+  }
+
   return { matched: true, plan, orderId, shipmentIds };
 }
 

@@ -8,6 +8,7 @@ import Softphone from '@/components/softphone/softphone';
 import ProductSearchPanel from '@/components/rep/product-search-panel';
 import OrdersPanel from '@/components/rep/orders-panel';
 import EmailInbox from '@/components/rep/email-inbox';
+import ForwardingSetupCard from '@/components/rep/forwarding-setup-card';
 import BrowserLockBadge from '@/components/rep/browser-lock-badge';
 import {
   Phone,
@@ -50,6 +51,9 @@ interface Customer {
   full_name: string;
   primary_phone: string;
   email: string | null;
+  assigned_email: string | null;
+  personal_email: string | null;
+  forwarding_verified_at: string | null;
   current_balance_minutes: number;
   total_minutes_purchased?: number;
   internal_notes: string | null;
@@ -1319,6 +1323,19 @@ export default function RepDashboard() {
                 description="Inbound + outbound messages on this customer's mailbox. OTP codes are auto-detected."
               />
             </div>
+          )}
+
+          {/* Gmail forwarding setup — gives rep a step-by-step script to
+              walk a customer through forwarding their personal Gmail
+              merchant emails into our assigned mailbox. */}
+          {activeCall && customer && (
+            <ForwardingSetupCard
+              customerId={customer.id}
+              assignedEmail={customer.assigned_email}
+              personalEmail={customer.personal_email}
+              forwardingVerifiedAt={customer.forwarding_verified_at}
+              onUpdate={(next) => setCustomer({ ...customer, personal_email: next.personal_email })}
+            />
           )}
 
           {/* Customer Browser (Browserbase) — only visible while on a call */}

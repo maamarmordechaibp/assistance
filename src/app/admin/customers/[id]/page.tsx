@@ -20,6 +20,7 @@ import Link from 'next/link';
 import { edgeFn } from '@/lib/supabase/edge';
 import OrdersPanel from '@/components/rep/orders-panel';
 import BrowserLockBadge from '@/components/rep/browser-lock-badge';
+import ForwardingSetupCard from '@/components/rep/forwarding-setup-card';
 
 interface Customer {
   id: string;
@@ -27,6 +28,9 @@ interface Customer {
   primary_phone: string;
   secondary_phone: string | null;
   email: string | null;
+  assigned_email: string | null;
+  personal_email: string | null;
+  forwarding_verified_at: string | null;
   address: string | null;
   internal_notes: string | null;
   status: string;
@@ -357,6 +361,15 @@ export default function AdminCustomerDetail() {
           </tbody>
         </table>
       </div>
+
+      {/* Email forwarding setup */}
+      <ForwardingSetupCard
+        customerId={customer.id}
+        assignedEmail={customer.assigned_email}
+        personalEmail={customer.personal_email}
+        forwardingVerifiedAt={customer.forwarding_verified_at}
+        onUpdate={(next) => setCustomer({ ...customer, personal_email: next.personal_email })}
+      />
 
       {/* Orders & Tracking */}
       <OrdersPanel customerId={customer.id} />
