@@ -51,15 +51,16 @@ function snippetOf(text: string | null | undefined): string | null {
 }
 function detectOtp(subject: string | null | undefined, text: string | null | undefined): string | null {
   const haystack = `${subject || ''}\n${text || ''}`;
-  if (!haystack) return null;
-  const labelled = haystack.match(
-    /(?:code|otp|passcode|pass\s*code|verification|verify|pin|two[-\s]?factor|2fa|one[-\s]?time)\D{0,30}([0-9]{4,8}|[A-Z0-9]{4,8})/i,
-  );
-  if (labelled) return labelled[1];
-  const standalone = haystack.match(/(?:^|\n)\s*([0-9]{4,8})\s*(?:$|\n)/);
+  if (!haystack.trim()) return null;
+  const LABEL = '(?:code|otp|passcode|pass\\s*code|verification|verify|pin|two[-\\s]?factor|2fa|one[-\\s]?time)';
+  const labelledDigits = haystack.match(new RegExp(`${LABEL}\\D{0,30}(\\d{4,10})`, 'i'));
+  if (labelledDigits) return labelledDigits[1];
+  const labelledAlnum = haystack.match(new RegExp(`${LABEL}\\W{0,30}([A-Z0-9]{4,10})`));
+  if (labelledAlnum && /\d/.test(labelledAlnum[1])) return labelledAlnum[1];
+  const standalone = haystack.match(/(?:^|\n)\s*(\d{4,10})\s*(?:$|\n)/);
   if (standalone) return standalone[1];
   if (subject) {
-    const subj = subject.match(/\b([0-9]{4,8})\b/);
+    const subj = subject.match(/\b(\d{4,10})\b/);
     if (subj) return subj[1];
   }
   return null;

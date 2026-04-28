@@ -44,12 +44,24 @@ serve(async (req) => {
 
   const { data: call } = await supabase
     .from('calls')
-    .select(`*, task_category:task_categories(name), task_benchmark:task_benchmarks(expected_min_minutes, expected_max_minutes)`)
+    .select(`*, task_category:task_categories(name)`) 
     .eq('id', callId)
-    .single();
+    .maybeSingle();
 
   if (!call) {
     return new Response(JSON.stringify({ error: 'Call not found' }), { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  }
+
+  // Look up benchmark for this call's task category (separate query because
+  // task_benchmarks references calls only indirectly via task_category_id).
+  let benchmark: { expected_min_minutes: number | null; expected_max_minutes: number | null } | null = null;
+  if (call.task_category_id) {
+    const { data: bench } = await supabase
+      .from('task_benchmarks')
+      .select('expected_min_minutes, expected_max_minutes')
+      .eq('task_category_id', call.task_category_id)
+      .maybeSingle();
+    benchmark = bench || null;
   }
 
   if (!call.transcript_text) {
@@ -65,8 +77,8 @@ serve(async (req) => {
     const durationMinutes = Math.round((call.total_duration_seconds || 0) / 60);
     let userPrompt = `Call transcript:\n${call.transcript_text}\n\nCall duration: ${durationMinutes} minutes\n`;
     if (call.task_category?.name) userPrompt += `Assigned task category: ${call.task_category.name}\n`;
-    if (call.task_benchmark?.expected_min_minutes && call.task_benchmark?.expected_max_minutes) {
-      userPrompt += `Expected duration range: ${call.task_benchmark.expected_min_minutes}-${call.task_benchmark.expected_max_minutes} minutes\n`;
+    if (benchmark?.expected_min_minutes && benchmark?.expected_max_minutes) {
+      userPrompt += `Expected duration range: ${benchmark.expected_min_minutes}-${benchmark.expected_max_minutes} minutes\n`;
     }
     if (call.extensions_used > 0) userPrompt += `The representative extended the call ${call.extensions_used} time(s) beyond the time limit.\n`;
     userPrompt += `\nAnalyze this call and return a JSON object with the required fields.`;

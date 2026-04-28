@@ -106,26 +106,37 @@ function snippetOf(text: string | null): string | null {
   return text.replace(/\s+/g, ' ').trim().slice(0, 200) || null;
 }
 
-// Extract a likely OTP from the subject + body. Looks for runs of 4-10
-// digits or alphanumerics that are CLEARLY codes (preceded by "code",
-// "verification", "passcode", "otp", or appearing in subject lines).
+// Extract a likely OTP from the subject + body. We deliberately avoid
+// matching lowercase "words" (otherwise [A-Z0-9]{4,8}/i happily catches
+// fragments like "ount" inside "account"). Real OTPs are almost always
+// digit-only or all-uppercase mixed with digits.
 function detectOtp(subject: string | null, text: string | null): string | null {
   const haystack = `${subject || ''}\n${text || ''}`;
-  if (!haystack) return null;
+  if (!haystack.trim()) return null;
 
-  // Pattern A: "code: 123456" / "verification code 123456" / "your OTP is 123456"
-  const labelled = haystack.match(
-    /(?:code|otp|passcode|pass\s*code|verification|verify|pin|two[-\s]?factor|2fa|one[-\s]?time)\D{0,30}([0-9]{4,8}|[A-Z0-9]{4,8})/i,
+  const LABEL = '(?:code|otp|passcode|pass\\s*code|verification|verify|pin|two[-\\s]?factor|2fa|one[-\\s]?time)';
+
+  // Pattern A1: labelled digits — e.g. "code: 123456", "OTP is 482913".
+  const labelledDigits = haystack.match(
+    new RegExp(`${LABEL}\\D{0,30}(\\d{4,10})`, 'i'),
   );
-  if (labelled) return labelled[1];
+  if (labelledDigits) return labelledDigits[1];
 
-  // Pattern B: standalone 4-8 digit run on its own line — common in OTP emails.
-  const standalone = haystack.match(/(?:^|\n)\s*([0-9]{4,8})\s*(?:$|\n)/);
+  // Pattern A2: labelled alphanumeric, but must contain at least one digit
+  // and be uppercase in the original text (not /i). Avoids matching plain
+  // English words after the label.
+  const labelledAlnum = haystack.match(
+    new RegExp(`${LABEL}\\W{0,30}([A-Z0-9]{4,10})`),
+  );
+  if (labelledAlnum && /\d/.test(labelledAlnum[1])) return labelledAlnum[1];
+
+  // Pattern B: standalone digit run on its own line.
+  const standalone = haystack.match(/(?:^|\n)\s*(\d{4,10})\s*(?:$|\n)/);
   if (standalone) return standalone[1];
 
-  // Pattern C: a 6-digit run in the subject (Amazon/Google style).
+  // Pattern C: a digit run in the subject (Amazon/Google style: "123456 is your code").
   if (subject) {
-    const subj = subject.match(/\b([0-9]{4,8})\b/);
+    const subj = subject.match(/\b(\d{4,10})\b/);
     if (subj) return subj[1];
   }
   return null;
