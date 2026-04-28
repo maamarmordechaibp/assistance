@@ -19,6 +19,7 @@
 //     either auth scheme.
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
+import { ingestEmailAsOrder } from '../_shared/order-ingest.ts';
 
 // ── Svix signature verification ────────────────────────────────
 // Mirrors github.com/svix/svix-webhooks (the lib Resend uses on the wire).
@@ -379,7 +380,41 @@ serve(async (req) => {
 
   console.log(`[email-inbound] stored mailbox=${normalized.mailbox} customer=${customerId ?? 'unmatched'} otp=${detected_otp ?? 'none'} subject="${(normalized.subject || '').slice(0, 80)}"`);
 
-  return new Response(JSON.stringify({ ok: true, id: row?.id, customer_id: customerId, otp: detected_otp }), {
+  // Best-effort: classify the email and upsert orders/shipments. Failures
+  // here are logged but never block the webhook response — Resend will
+  // otherwise replay the delivery.
+  let ingestSummary: { matched: boolean; orderId?: string; skipReason?: string } | null = null;
+  if (row?.id) {
+    try {
+      const ingest = await ingestEmailAsOrder(
+        supabase,
+        {
+          id: row.id,
+          customer_id: customerId,
+          from_address: normalized.from_address,
+          subject: normalized.subject,
+          text_body: normalized.text_body,
+          html_body: normalized.html_body,
+          received_at: normalized.received_at,
+          raw_payload: raw as Record<string, unknown>,
+        },
+        { runCarrierRefresh: true },
+      );
+      ingestSummary = {
+        matched: ingest.matched,
+        orderId: ingest.orderId,
+        skipReason: ingest.skipReason,
+      };
+      console.log(
+        `[email-inbound] ingest matched=${ingest.matched} merchant=${ingest.plan.merchant ?? 'none'} ` +
+          `tracking=${ingest.plan.trackings.length} order=${ingest.orderId ?? 'n/a'} skip=${ingest.skipReason ?? 'n/a'}`,
+      );
+    } catch (err) {
+      console.error('[email-inbound] ingest failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  return new Response(JSON.stringify({ ok: true, id: row?.id, customer_id: customerId, otp: detected_otp, ingest: ingestSummary }), {
     headers: { 'Content-Type': 'application/json' },
   });
 });
