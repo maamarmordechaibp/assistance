@@ -93,13 +93,54 @@ interface ComposeProps {
 }
 
 function ComposeModal({ customer, defaultTo, defaultSubject, defaultReplyTo, onClose, onSent }: ComposeProps) {
+  const supabase = useMemo(() => createClient(), []);
+  const [picked, setPicked] = useState<CustomerLite | null>(customer);
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [customerOptions, setCustomerOptions] = useState<CustomerLite[]>([]);
+  const [searchingCustomers, setSearchingCustomers] = useState(false);
   const [to, setTo] = useState(defaultTo || '');
   const [subject, setSubject] = useState(defaultSubject || '');
   const [body, setBody] = useState('');
   const [sending, setSending] = useState(false);
 
+  // Load matching customers when no customer is preset and the rep is typing.
+  useEffect(() => {
+    if (picked) return;
+    let cancelled = false;
+    const term = customerSearch.trim();
+    setSearchingCustomers(true);
+    const run = async () => {
+      let q = supabase
+        .from('customers')
+        .select('id, full_name, primary_phone, assigned_email')
+        .not('assigned_email', 'is', null)
+        .order('updated_at', { ascending: false })
+        .limit(20);
+      if (term) {
+        // Match by name, phone or assigned mailbox.
+        q = q.or(
+          `full_name.ilike.%${term}%,primary_phone.ilike.%${term}%,assigned_email.ilike.%${term}%`
+        );
+      }
+      const { data, error } = await q;
+      if (cancelled) return;
+      if (error) {
+        toast.error('Customer search failed: ' + error.message);
+        setCustomerOptions([]);
+      } else {
+        setCustomerOptions((data as unknown as CustomerLite[]) || []);
+      }
+      setSearchingCustomers(false);
+    };
+    const t = setTimeout(run, 200);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [supabase, customerSearch, picked]);
+
   const send = async () => {
-    if (!customer?.id) {
+    if (!picked?.id) {
       toast.error('Pick a customer first');
       return;
     }
@@ -112,7 +153,7 @@ function ComposeModal({ customer, defaultTo, defaultSubject, defaultReplyTo, onC
       const res = await edgeFn('email-send', {
         method: 'POST',
         body: JSON.stringify({
-          customer_id: customer.id,
+          customer_id: picked.id,
           to: to.split(',').map((s) => s.trim()).filter(Boolean),
           subject,
           text: body,
@@ -143,10 +184,10 @@ function ComposeModal({ customer, defaultTo, defaultSubject, defaultReplyTo, onC
             <Send className="size-4 text-accent" />
             <div className="min-w-0">
               <div className="text-sm font-semibold truncate">
-                {customer ? `Send as ${customer.full_name || 'customer'}` : 'Compose email'}
+                {picked ? `Send as ${picked.full_name || 'customer'}` : 'Compose email'}
               </div>
-              {customer?.assigned_email && (
-                <div className="text-xs text-muted-foreground truncate">From: {customer.assigned_email}</div>
+              {picked?.assigned_email && (
+                <div className="text-xs text-muted-foreground truncate">From: {picked.assigned_email}</div>
               )}
             </div>
           </div>
@@ -155,6 +196,56 @@ function ComposeModal({ customer, defaultTo, defaultSubject, defaultReplyTo, onC
           </Button>
         </div>
         <div className="space-y-3 p-4">
+          {!picked ? (
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Send as customer</label>
+              <Input
+                value={customerSearch}
+                onChange={(e) => setCustomerSearch(e.target.value)}
+                placeholder="Search by name, phone, or assigned mailbox…"
+                autoFocus
+              />
+              <div className="mt-2 max-h-56 overflow-y-auto rounded-md border border-border">
+                {searchingCustomers && customerOptions.length === 0 ? (
+                  <div className="flex items-center justify-center gap-2 p-4 text-sm text-muted-foreground">
+                    <Loader2 className="size-4 animate-spin" /> Searching…
+                  </div>
+                ) : customerOptions.length === 0 ? (
+                  <div className="p-4 text-sm text-muted-foreground">
+                    No customers with an assigned mailbox match.
+                  </div>
+                ) : (
+                  <ul className="divide-y divide-border">
+                    {customerOptions.map((c) => (
+                      <li key={c.id}>
+                        <button
+                          type="button"
+                          className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left hover:bg-muted/50"
+                          onClick={() => setPicked(c)}
+                        >
+                          <span className="text-sm font-medium">{c.full_name || 'Unnamed customer'}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {c.assigned_email || 'no mailbox'}
+                            {c.primary_phone ? ' · ' + formatPhone(c.primary_phone) : ''}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between rounded-md border border-border bg-muted/30 px-3 py-2 text-xs">
+              <span>
+                Sending as <strong>{picked.full_name || 'customer'}</strong>
+                {picked.assigned_email ? ` <${picked.assigned_email}>` : ''}
+              </span>
+              <Button variant="ghost" size="sm" onClick={() => setPicked(null)}>
+                Change
+              </Button>
+            </div>
+          )}
           <div>
             <label className="text-xs font-medium text-muted-foreground">To (comma-separated)</label>
             <Input value={to} onChange={(e) => setTo(e.target.value)} placeholder="recipient@example.com" />
@@ -176,7 +267,7 @@ function ComposeModal({ customer, defaultTo, defaultSubject, defaultReplyTo, onC
             <Button variant="outline" onClick={onClose} disabled={sending}>
               Cancel
             </Button>
-            <Button variant="accent" onClick={send} loading={sending}>
+            <Button variant="accent" onClick={send} loading={sending} disabled={!picked}>
               <Send /> Send
             </Button>
           </div>
@@ -334,18 +425,20 @@ export default function EmailInbox({ customerId, title, description }: EmailInbo
             <Button variant="outline" size="sm" onClick={load}>
               <RefreshCw /> Refresh
             </Button>
-            {customerId && (
-              <Button
-                variant="accent"
-                size="sm"
-                onClick={() => {
+            <Button
+              variant="accent"
+              size="sm"
+              onClick={() => {
+                if (customerId) {
                   const cust = emails.find((e) => e.customer_id === customerId)?.customer || null;
                   startCompose(cust);
-                }}
-              >
-                <Send /> Compose
-              </Button>
-            )}
+                } else {
+                  startCompose(null);
+                }
+              }}
+            >
+              <Send /> Compose
+            </Button>
           </>
         }
       />
