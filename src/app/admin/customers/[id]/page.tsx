@@ -15,6 +15,8 @@ import {
   Save,
   Loader2,
   ArrowLeft,
+  Plus,
+  X,
 } from 'lucide-react';
 import Link from 'next/link';
 import { edgeFn } from '@/lib/supabase/edge';
@@ -59,6 +61,13 @@ interface Call {
   task_category?: { name: string } | null;
 }
 
+interface PhoneAlias {
+  id: string;
+  phone: string;
+  note: string | null;
+  created_at: string;
+}
+
 export default function AdminCustomerDetail() {
   const { id } = useParams();
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -67,20 +76,26 @@ export default function AdminCustomerDetail() {
   const [editing, setEditing] = useState(false);
   const [formData, setFormData] = useState<Partial<Customer>>({});
   const [loading, setLoading] = useState(true);
+  const [aliases, setAliases] = useState<PhoneAlias[]>([]);
+  const [newAlias, setNewAlias] = useState('');
+  const [newAliasNote, setNewAliasNote] = useState('');
+  const [addingAlias, setAddingAlias] = useState(false);
   const supabase = createClient();
 
   useEffect(() => {
     async function load() {
-      const [{ data: cust }, ledgerRes, callsRes] = await Promise.all([
+      const [{ data: cust }, ledgerRes, callsRes, { data: aliasRows }] = await Promise.all([
         supabase.from('customers').select('*').eq('id', id).single(),
         edgeFn('ledger', { params: { customerId: id as string, limit: '20' } }),
         edgeFn('calls', { params: { customerId: id as string, limit: '20' } }),
+        supabase.from('customer_phone_aliases').select('*').eq('customer_id', id as string).order('created_at'),
       ]);
 
       if (cust) {
         setCustomer(cust as Customer);
         setFormData(cust);
       }
+      setAliases((aliasRows as PhoneAlias[]) || []);
 
       if (ledgerRes.ok) {
         const data = await ledgerRes.json();
@@ -96,6 +111,33 @@ export default function AdminCustomerDetail() {
     }
     load();
   }, [id]);
+
+  async function addAlias() {
+    const phone = newAlias.trim();
+    if (!phone) return;
+    setAddingAlias(true);
+    const { data, error } = await supabase
+      .from('customer_phone_aliases')
+      .insert({ customer_id: id as string, phone, note: newAliasNote.trim() || null })
+      .select('*')
+      .single();
+    setAddingAlias(false);
+    if (error) {
+      toast.error(error.message.includes('uniq') ? 'That number is already linked to a customer.' : 'Failed to add alias.');
+      return;
+    }
+    setAliases((prev) => [...prev, data as PhoneAlias]);
+    setNewAlias('');
+    setNewAliasNote('');
+    toast.success('Phone alias added');
+  }
+
+  async function removeAlias(aliasId: string) {
+    const { error } = await supabase.from('customer_phone_aliases').delete().eq('id', aliasId);
+    if (error) { toast.error('Failed to remove'); return; }
+    setAliases((prev) => prev.filter((a) => a.id !== aliasId));
+    toast.success('Alias removed');
+  }
 
   const handleSave = async () => {
     const res = await edgeFn('customers', {
@@ -370,6 +412,64 @@ export default function AdminCustomerDetail() {
         forwardingVerifiedAt={customer.forwarding_verified_at}
         onUpdate={(next) => setCustomer({ ...customer, personal_email: next.personal_email })}
       />
+
+      {/* Phone Aliases */}
+      <div className="bg-card rounded-xl shadow-sm border p-6">
+        <h3 className="font-semibold flex items-center gap-2 mb-1">
+          <Phone className="w-4 h-4" />
+          Phone Aliases
+        </h3>
+        <p className="text-xs text-muted-foreground mb-4">
+          Additional numbers this customer calls from. Calls and SMS from these numbers will automatically link to this customer.
+        </p>
+
+        {aliases.length > 0 && (
+          <div className="divide-y mb-4 border rounded-lg overflow-hidden">
+            {aliases.map((alias) => (
+              <div key={alias.id} className="flex items-center justify-between px-4 py-2 text-sm bg-muted/20">
+                <div>
+                  <span className="font-mono font-medium">{formatPhone(alias.phone)}</span>
+                  {alias.note && <span className="ml-3 text-xs text-muted-foreground">{alias.note}</span>}
+                </div>
+                <button
+                  onClick={() => removeAlias(alias.id)}
+                  className="p-1 rounded hover:bg-destructive/10 text-destructive"
+                  title="Remove alias"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <input
+            type="tel"
+            placeholder="Phone number (e.g. +18001234567)"
+            value={newAlias}
+            onChange={(e) => setNewAlias(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && addAlias()}
+            className="flex-1 border rounded px-3 py-1.5 text-sm"
+          />
+          <input
+            type="text"
+            placeholder="Note (optional)"
+            value={newAliasNote}
+            onChange={(e) => setNewAliasNote(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && addAlias()}
+            className="w-36 border rounded px-3 py-1.5 text-sm"
+          />
+          <button
+            onClick={addAlias}
+            disabled={addingAlias || !newAlias.trim()}
+            className="flex items-center gap-1 px-3 py-1.5 rounded bg-accent text-accent-foreground text-sm font-medium hover:bg-accent/80 disabled:opacity-50"
+          >
+            {addingAlias ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+            Add
+          </button>
+        </div>
+      </div>
 
       {/* Orders & Tracking */}
       <OrdersPanel customerId={customer.id} />

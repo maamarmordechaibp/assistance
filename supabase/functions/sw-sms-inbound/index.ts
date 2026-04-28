@@ -31,9 +31,23 @@ serve(async (req) => {
   const fromE164 = normalizeE164(from);
   const toE164 = normalizeE164(to);
 
-  // Attach to customer by primary_phone
-  const { data: customer } = await supabase.from('customers').select('id').eq('primary_phone', fromE164).maybeSingle();
-  let customerId = customer?.id || null;
+  // Attach to customer: check primary_phone, secondary_phone, then aliases
+  const variants = [fromE164];
+  const digits = fromE164.replace(/\D/g, '');
+  if (digits.length === 11 && digits.startsWith('1')) {
+    variants.push(`+${digits}`, digits.slice(1), `+1${digits.slice(1)}`);
+  } else if (digits.length === 10) {
+    variants.push(`+1${digits}`, `1${digits}`, `+${digits}`);
+  }
+
+  let customerId: string | null = null;
+  // Primary phone
+  { const { data: c } = await supabase.from('customers').select('id').in('primary_phone', variants).eq('status', 'active').limit(1).maybeSingle(); if (c) customerId = c.id; }
+  // Secondary phone
+  if (!customerId) { const { data: c } = await supabase.from('customers').select('id').in('secondary_phone', variants).eq('status', 'active').limit(1).maybeSingle(); if (c) customerId = c.id; }
+  // Phone aliases
+  if (!customerId) { const { data: a } = await supabase.from('customer_phone_aliases').select('customer_id').in('phone', variants).limit(1).maybeSingle(); if (a) customerId = a.customer_id; }
+
   let callId = null;
   let repId = null;
   if (customerId) {

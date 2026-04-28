@@ -999,6 +999,25 @@ serve(async (req) => {
     customer = secMatch ?? null;
   }
 
+  // Check phone aliases table (covers any extra numbers admin has linked to a customer)
+  if (!customer) {
+    const { data: aliasMatch } = await supabase
+      .from('customer_phone_aliases')
+      .select('customer_id')
+      .in('phone', variantsList)
+      .limit(1)
+      .maybeSingle();
+    if (aliasMatch?.customer_id) {
+      const { data: aliasCustomer } = await supabase
+        .from('customers')
+        .select('*')
+        .eq('id', aliasMatch.customer_id)
+        .eq('status', 'active')
+        .maybeSingle();
+      customer = aliasCustomer ?? null;
+    }
+  }
+
   if (!customer) {
     // Always store new customers in E.164 so future lookups are deterministic.
     const e164 = fromDigits.length === 10
