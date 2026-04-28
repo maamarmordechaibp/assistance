@@ -99,6 +99,7 @@ serve(async (req) => {
         from: swFrom,
         url: callbackUrl,
         record: true,
+        recordingStatusCallback: `${baseUrl}/sw-recording-complete`,
       });
 
       // Mark as in-progress

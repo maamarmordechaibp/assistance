@@ -212,6 +212,7 @@ serve(async (req) => {
       timeout: 30,
       timeLimit: 14400,
       record: true,
+      recordingStatusCallback: `${baseUrl}/sw-recording-complete`,
       // If the claimed rep doesn't answer, return through claimed-rep-fallback
       // so we record an abandoned-call callback before hanging up.
       action: `${baseUrl}/sw-inbound?step=claimed-rep-fallback`,
@@ -231,6 +232,7 @@ serve(async (req) => {
         timeout: 30,
         timeLimit: 14400,
         record: true,
+        recordingStatusCallback: `${baseUrl}/sw-recording-complete`,
         action: `${baseUrl}/sw-inbound?step=claimed-rep-fallback`,
       });
       bridgeKind = 'browser';
@@ -301,6 +303,7 @@ serve(async (req) => {
       timeLimit: 14400,
       action: `${baseUrl}/sw-inbound?step=outbound-end&callId=${callId ?? ''}`,
       record: true,
+      recordingStatusCallback: `${baseUrl}/sw-recording-complete`,
     }) : null;
 
     console.log(`[sw-inbound] outbound-bridge rep=${repIdParam} callId=${callId} target=${rep?.sip_uri ? 'sip' : rep?.phone_e164 ? 'pstn' : 'none'}`);

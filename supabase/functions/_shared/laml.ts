@@ -61,10 +61,17 @@ export function dial(
     action?: string;
     callerId?: string;
     statusCallback?: string;
+    recordingStatusCallback?: string;
   } = {}
 ): string {
   const attrs: string[] = [];
-  if (opts.record) attrs.push('record="record-from-answer-dual"');
+  if (opts.record) {
+    attrs.push('record="record-from-answer-dual"');
+    if (opts.recordingStatusCallback) {
+      attrs.push(`recordingStatusCallback="${escapeXml(opts.recordingStatusCallback)}"`);
+      attrs.push('recordingStatusCallbackEvent="completed"');
+    }
+  }
   if (opts.timeLimit) attrs.push(`timeLimit="${opts.timeLimit}"`);
   if (opts.action) attrs.push(`action="${escapeXml(opts.action)}"`);
   if (opts.callerId) attrs.push(`callerId="${escapeXml(opts.callerId)}"`);
@@ -87,10 +94,17 @@ export function dialRep(
     callerId?: string;
     timeout?: number;
     statusCallback?: string;
+    recordingStatusCallback?: string;
   } = {}
 ): string | null {
   const attrs: string[] = [];
-  if (opts.record) attrs.push('record="record-from-answer-dual"');
+  if (opts.record) {
+    attrs.push('record="record-from-answer-dual"');
+    if (opts.recordingStatusCallback) {
+      attrs.push(`recordingStatusCallback="${escapeXml(opts.recordingStatusCallback)}"`);
+      attrs.push('recordingStatusCallbackEvent="completed"');
+    }
+  }
   if (opts.timeLimit) attrs.push(`timeLimit="${opts.timeLimit}"`);
   if (opts.timeout) attrs.push(`timeout="${opts.timeout}"`);
   if (opts.action) attrs.push(`action="${escapeXml(opts.action)}"`);
@@ -121,16 +135,19 @@ export function dialClient(
     action?: string;
     callerId?: string;
     timeout?: number;
-    // When set, use <Sip> verb (sip:identity@sipDomain) instead of <Client>.
-    // Required for Call Fabric SAT subscribers which are not in the legacy
-    // LAML/Verto client registry that <Client> checks.
     sipDomain?: string;
-    // URL played to the rep when they answer (before caller is connected)
     repGreetingUrl?: string;
+    recordingStatusCallback?: string;
   } = {}
 ): string {
   const attrs: string[] = [];
-  if (opts.record) attrs.push('record="record-from-answer-dual"');
+  if (opts.record) {
+    attrs.push('record="record-from-answer-dual"');
+    if (opts.recordingStatusCallback) {
+      attrs.push(`recordingStatusCallback="${escapeXml(opts.recordingStatusCallback)}"`);
+      attrs.push('recordingStatusCallbackEvent="completed"');
+    }
+  }
   if (opts.timeLimit) attrs.push(`timeLimit="${opts.timeLimit}"`);
   if (opts.action) attrs.push(`action="${escapeXml(opts.action)}"`);
   if (opts.callerId) attrs.push(`callerId="${escapeXml(opts.callerId)}"`);
@@ -155,10 +172,17 @@ export function dialMultipleClients(
     callerId?: string;
     timeout?: number;
     sipDomain?: string;
+    recordingStatusCallback?: string;
   }
 ): string {
   const attrs: string[] = [];
-  if (opts.record) attrs.push('record="record-from-answer-dual"');
+  if (opts.record) {
+    attrs.push('record="record-from-answer-dual"');
+    if (opts.recordingStatusCallback) {
+      attrs.push(`recordingStatusCallback="${escapeXml(opts.recordingStatusCallback)}"`);
+      attrs.push('recordingStatusCallbackEvent="completed"');
+    }
+  }
   if (opts.timeLimit) attrs.push(`timeLimit="${opts.timeLimit}"`);
   if (opts.action) attrs.push(`action="${escapeXml(opts.action)}"`);
   if (opts.callerId) attrs.push(`callerId="${escapeXml(opts.callerId)}"`);
@@ -190,6 +214,7 @@ export function dialConference(
     timeLimit?: number;
     callerId?: string;
     statusCallback?: string;
+    recordingStatusCallback?: string;
   } = {}
 ): string {
   const confAttrs: string[] = [];
@@ -197,7 +222,13 @@ export function dialConference(
   if (opts.endConferenceOnExit !== undefined) confAttrs.push(`endConferenceOnExit="${opts.endConferenceOnExit}"`);
   if (opts.waitUrl !== undefined) confAttrs.push(`waitUrl="${escapeXml(opts.waitUrl)}"`);
   if (opts.beep !== undefined) confAttrs.push(`beep="${opts.beep}"`);
-  if (opts.record) confAttrs.push('record="record-from-start"');
+  if (opts.record) {
+    confAttrs.push('record="record-from-start"');
+    if (opts.recordingStatusCallback) {
+      confAttrs.push(`recordingStatusCallback="${escapeXml(opts.recordingStatusCallback)}"`);
+      confAttrs.push('recordingStatusCallbackEvent="completed"');
+    }
+  }
   if (opts.maxParticipants) confAttrs.push(`maxParticipants="${opts.maxParticipants}"`);
 
   const dialAttrs: string[] = [];

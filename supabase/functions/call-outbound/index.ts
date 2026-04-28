@@ -137,6 +137,7 @@ serve(async (req) => {
         from: swFrom,
         url: bridgeUrl,
         record: true,
+        recordingStatusCallback: `${supabaseUrl}/functions/v1/sw-recording-complete`,
         timeLimit: 14400,
       });
       swCallSid = swRes?.sid ?? null;

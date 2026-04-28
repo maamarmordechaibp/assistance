@@ -51,14 +51,20 @@ export async function updateCall(
 }
 
 export async function createCall(params: {
-  to: string; from: string; url: string; statusCallback?: string; record?: boolean; timeLimit?: number;
+  to: string; from: string; url: string; statusCallback?: string; record?: boolean; timeLimit?: number; recordingStatusCallback?: string;
 }) {
   const body = new URLSearchParams();
   body.set('To', params.to);
   body.set('From', params.from);
   body.set('Url', params.url);
   if (params.statusCallback) body.set('StatusCallback', params.statusCallback);
-  if (params.record) body.set('Record', 'true');
+  if (params.record) {
+    body.set('Record', 'true');
+    if (params.recordingStatusCallback) {
+      body.set('RecordingStatusCallback', params.recordingStatusCallback);
+      body.set('RecordingStatusCallbackEvent', 'completed');
+    }
+  }
   if (params.timeLimit) body.set('TimeLimit', params.timeLimit.toString());
   const res = await swFetch('/Calls.json', { method: 'POST', body: body.toString() });
   return res.json();
@@ -67,6 +73,25 @@ export async function createCall(params: {
 export async function downloadRecording(recordingUrl: string): Promise<ArrayBuffer> {
   const res = await fetch(recordingUrl, { headers: { Authorization: getAuthHeader() } });
   return res.arrayBuffer();
+}
+
+/** List all recordings for a given CallSid via the LAML REST API. */
+export async function listRecordingsForCall(callSid: string): Promise<Array<{ sid: string; uri: string; duration: string; date_created: string }>> {
+  const res = await swFetch(`/Calls/${callSid}/Recordings.json`);
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    throw new Error(`SignalWire listRecordings ${res.status}: ${txt.slice(0, 200)}`);
+  }
+  const json = await res.json();
+  return (json.recordings || []) as Array<{ sid: string; uri: string; duration: string; date_created: string }>;
+}
+
+/** Given a recording's resource URI fragment (e.g. /api/laml/2010-04-01/Accounts/<sid>/Recordings/<rsid>.json),
+ *  build the public download URL for the .wav. */
+export function buildRecordingMediaUrl(recordingSid: string): string {
+  const space = getSpaceUrl();
+  const projectId = Deno.env.get('SIGNALWIRE_PROJECT_ID')!;
+  return `https://${space}/api/laml/2010-04-01/Accounts/${projectId}/Recordings/${recordingSid}.wav`;
 }
 
 /** Convert an email (or any string) to a valid SignalWire resource identity.

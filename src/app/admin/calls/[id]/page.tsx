@@ -112,6 +112,41 @@ export default function AdminCallDetail() {
     }
   }
 
+  async function pullRecordingFromSignalwire() {
+    if (!id) return;
+    setTranscribing(true);
+    setTranscribeError(null);
+    try {
+      const res = await edgeFn('sw-recording-complete', {
+        method: 'POST',
+        body: JSON.stringify({ callId: id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setTranscribeError(data?.error || `Pull failed (${res.status})`);
+      } else {
+        // Reload the page so the new recording_storage_path + signed URL show up.
+        const { data: refreshed } = await supabase
+          .from('calls')
+          .select(`*, customer:customers(full_name, primary_phone), rep:reps(full_name, email), task_category:task_categories(name)`)
+          .eq('id', id)
+          .single();
+        if (refreshed) {
+          setCall(refreshed as unknown as CallDetail);
+          const sp = (refreshed as { recording_storage_path?: string }).recording_storage_path;
+          if (sp) {
+            const { data: signed } = await supabase.storage.from('call-recordings').createSignedUrl(sp, 60 * 30);
+            if (signed?.signedUrl) setRecordingSignedUrl(signed.signedUrl);
+          }
+        }
+      }
+    } catch (e) {
+      setTranscribeError(e instanceof Error ? e.message : 'Pull failed');
+    } finally {
+      setTranscribing(false);
+    }
+  }
+
   useEffect(() => {
     async function load() {
       const { data: callData } = await supabase
@@ -285,7 +320,7 @@ export default function AdminCallDetail() {
       </div>
 
       {/* Recording */}
-      {(recordingSignedUrl || call.recording_storage_path) && (
+      {(recordingSignedUrl || call.recording_storage_path) ? (
         <div className="bg-card rounded-xl shadow-sm border p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-semibold flex items-center gap-2">
@@ -312,7 +347,27 @@ export default function AdminCallDetail() {
             <p className="text-xs text-muted-foreground">Recording stored but signed URL unavailable.</p>
           )}
         </div>
-      )}
+      ) : call.call_sid ? (
+        <div className="bg-card rounded-xl shadow-sm border p-6">
+          <h3 className="font-semibold flex items-center gap-2 mb-3">
+            <Mic className="w-4 h-4" /> Recording
+          </h3>
+          <p className="text-xs text-muted-foreground mb-3">
+            No recording stored locally. The audio may still be available on SignalWire — pull it now to transcribe and analyze.
+          </p>
+          {transcribeError && (
+            <div className="p-2 mb-3 rounded bg-destructive/10 text-destructive text-xs">{transcribeError}</div>
+          )}
+          <button
+            onClick={pullRecordingFromSignalwire}
+            disabled={transcribing}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-accent text-accent-foreground hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {transcribing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            Pull recording from SignalWire
+          </button>
+        </div>
+      ) : null}
 
       {/* Transcript */}
       {call.transcript_text && (
