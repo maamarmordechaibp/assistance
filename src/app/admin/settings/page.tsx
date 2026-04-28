@@ -37,14 +37,31 @@ export default function AdminSettings() {
     fetchSettings();
   }, []);
 
-  const handleSave = async (key: string) => {
+  // A setting is a boolean if its current persisted value is a JS boolean,
+  // or if its raw text representation is exactly "true" / "false".
+  const isBooleanSetting = (s: Setting) => {
+    if (typeof s.value === 'boolean') return true;
+    const raw = (editValues[s.key] ?? '').trim().toLowerCase();
+    return raw === 'true' || raw === 'false';
+  };
+
+  const getBoolValue = (key: string): boolean => {
+    const raw = (editValues[key] ?? '').trim().toLowerCase();
+    return raw === 'true';
+  };
+
+  const handleSave = async (key: string, overrideValue?: unknown) => {
     setSaving(key);
-    let value: unknown = editValues[key];
-    // Try parsing as JSON
-    try {
-      value = JSON.parse(editValues[key]);
-    } catch {
-      // Keep as string
+    let value: unknown;
+    if (overrideValue !== undefined) {
+      value = overrideValue;
+    } else {
+      value = editValues[key];
+      try {
+        value = JSON.parse(editValues[key]);
+      } catch {
+        // keep as string
+      }
     }
 
     const res = await edgeFn('settings', {
@@ -54,12 +71,22 @@ export default function AdminSettings() {
 
     if (res.ok) {
       const updated = await res.json();
-      setSettings(settings.map(s => s.key === key ? { ...s, value: updated.value } : s));
+      setSettings(prev => prev.map(s => s.key === key ? { ...s, value: updated.value } : s));
+      setEditValues(prev => ({
+        ...prev,
+        [key]: typeof updated.value === 'string' ? updated.value : JSON.stringify(updated.value),
+      }));
       toast.success('Setting saved');
     } else {
       toast.error('Failed to save setting');
     }
     setSaving(null);
+  };
+
+  const toggleBoolean = async (key: string) => {
+    const next = !getBoolValue(key);
+    setEditValues(prev => ({ ...prev, [key]: String(next) }));
+    await handleSave(key, next);
   };
 
   if (loading) {
@@ -111,37 +138,64 @@ export default function AdminSettings() {
             <h3 className="font-semibold">{group}</h3>
           </div>
           <div className="divide-y">
-            {items.map((setting) => (
-              <div key={setting.key} className="px-6 py-4 flex items-center gap-4">
-                <div className="flex-1">
-                  <div className="text-sm font-medium">{setting.key}</div>
-                  {setting.description && (
-                    <div className="text-xs text-muted-foreground mt-0.5">{setting.description}</div>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={editValues[setting.key] || ''}
-                    onChange={(e) =>
-                      setEditValues({ ...editValues, [setting.key]: e.target.value })
-                    }
-                    className="w-48 rounded-lg border border-border px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                  />
-                  <button
-                    onClick={() => handleSave(setting.key)}
-                    disabled={saving === setting.key}
-                    className="p-2 rounded-lg bg-accent text-white hover:bg-accent/90 disabled:opacity-50"
-                  >
-                    {saving === setting.key ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Save className="w-4 h-4" />
+            {items.map((setting) => {
+              const isBool = isBooleanSetting(setting);
+              return (
+                <div key={setting.key} className="px-6 py-4 flex items-center gap-4">
+                  <div className="flex-1">
+                    <div className="text-sm font-medium">{setting.key}</div>
+                    {setting.description && (
+                      <div className="text-xs text-muted-foreground mt-0.5">{setting.description}</div>
                     )}
-                  </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {isBool ? (
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={getBoolValue(setting.key)}
+                        disabled={saving === setting.key}
+                        onClick={() => toggleBoolean(setting.key)}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 ${
+                          getBoolValue(setting.key) ? 'bg-accent' : 'bg-muted-foreground/30'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                            getBoolValue(setting.key) ? 'translate-x-5' : 'translate-x-0.5'
+                          }`}
+                        />
+                        {saving === setting.key && (
+                          <Loader2 className="absolute -right-6 w-4 h-4 animate-spin text-muted-foreground" />
+                        )}
+                      </button>
+                    ) : (
+                      <>
+                        <input
+                          type="text"
+                          value={editValues[setting.key] || ''}
+                          onChange={(e) =>
+                            setEditValues({ ...editValues, [setting.key]: e.target.value })
+                          }
+                          className="w-48 rounded-lg border border-border px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                        />
+                        <button
+                          onClick={() => handleSave(setting.key)}
+                          disabled={saving === setting.key}
+                          className="p-2 rounded-lg bg-accent text-white hover:bg-accent/90 disabled:opacity-50"
+                        >
+                          {saving === setting.key ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Save className="w-4 h-4" />
+                          )}
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       ))}

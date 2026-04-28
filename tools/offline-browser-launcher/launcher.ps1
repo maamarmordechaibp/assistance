@@ -219,7 +219,7 @@ $SyncJobScript = {
           Write-Log 'no credentials captured'
         }
       } else {
-        Write-Log "capture helper exited $LASTEXITCODE: $captureJson"
+        Write-Log "capture helper exited ${LASTEXITCODE}: $captureJson"
       }
     } catch {
       Write-Log "capture helper error: $_"
@@ -369,7 +369,7 @@ while ($listener.IsListening) {
             Expand-Archive -LiteralPath $tmpZip -DestinationPath $profileDir -Force
             Write-Host "[open] customer=$customerId profile restored" -ForegroundColor DarkGray
           } catch {
-            Write-Host "[open] download/expand failed for $customerId: $_" -ForegroundColor Yellow
+            Write-Host "[open] download/expand failed for ${customerId}: $_" -ForegroundColor Yellow
           } finally {
             Remove-Item -LiteralPath $tmpZip -Force -ErrorAction SilentlyContinue
           }

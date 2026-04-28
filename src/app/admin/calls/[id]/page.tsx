@@ -3,8 +3,9 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { edgeFn } from '@/lib/supabase/edge';
 import { formatDuration, formatDateTime, formatPhone } from '@/lib/utils';
-import { ArrowLeft, Clock, User, Phone, FileText, Brain, AlertTriangle, Loader2 } from 'lucide-react';
+import { ArrowLeft, Clock, User, Phone, FileText, Brain, AlertTriangle, Loader2, RefreshCw, Mic } from 'lucide-react';
 import Link from 'next/link';
 
 interface CallDetail {
@@ -49,7 +50,67 @@ export default function AdminCallDetail() {
   const [call, setCall] = useState<CallDetail | null>(null);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [loading, setLoading] = useState(true);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
+  const [transcribing, setTranscribing] = useState(false);
+  const [transcribeError, setTranscribeError] = useState<string | null>(null);
+  const [recordingSignedUrl, setRecordingSignedUrl] = useState<string | null>(null);
   const supabase = createClient();
+
+  async function runAnalysis() {
+    if (!id) return;
+    setAnalyzing(true);
+    setAnalyzeError(null);
+    try {
+      const res = await edgeFn('ai-analyze', {
+        method: 'POST',
+        body: JSON.stringify({ callId: id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setAnalyzeError(data?.error || `Analysis failed (${res.status})`);
+      } else {
+        setAnalysis(data as Analysis);
+      }
+    } catch (e) {
+      setAnalyzeError(e instanceof Error ? e.message : 'Analysis failed');
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
+  async function runTranscribe() {
+    if (!id || !call?.recording_storage_path) return;
+    setTranscribing(true);
+    setTranscribeError(null);
+    try {
+      const res = await edgeFn('sw-transcription', {
+        method: 'POST',
+        body: JSON.stringify({ callId: id, storagePath: call.recording_storage_path }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setTranscribeError(data?.error || `Transcription failed (${res.status})`);
+      } else {
+        // Refresh call so transcript_text shows up; ai-analyze is auto-triggered server-side.
+        const { data: refreshed } = await supabase
+          .from('calls')
+          .select(`*, customer:customers(full_name, primary_phone), rep:reps(full_name, email), task_category:task_categories(name)`) 
+          .eq('id', id)
+          .single();
+        if (refreshed) setCall(refreshed as unknown as CallDetail);
+        // Poll once for analysis a few seconds later.
+        setTimeout(async () => {
+          const { data: a } = await supabase.from('call_analyses').select('*').eq('call_id', id).maybeSingle();
+          if (a) setAnalysis(a as Analysis);
+        }, 4000);
+      }
+    } catch (e) {
+      setTranscribeError(e instanceof Error ? e.message : 'Transcription failed');
+    } finally {
+      setTranscribing(false);
+    }
+  }
 
   useEffect(() => {
     async function load() {
@@ -73,6 +134,17 @@ export default function AdminCallDetail() {
         .maybeSingle();
 
       if (analysisData) setAnalysis(analysisData as Analysis);
+
+      // Generate a short-lived signed URL for the stored recording so the
+      // admin can play it back without exposing the bucket publicly.
+      const storagePath = (callData as { recording_storage_path?: string } | null)?.recording_storage_path;
+      if (storagePath) {
+        const { data: signed } = await supabase
+          .storage
+          .from('call-recordings')
+          .createSignedUrl(storagePath, 60 * 30);
+        if (signed?.signedUrl) setRecordingSignedUrl(signed.signedUrl);
+      }
       setLoading(false);
     }
     load();
@@ -149,9 +221,23 @@ export default function AdminCallDetail() {
 
         {/* AI Analysis */}
         <div className="bg-card rounded-xl shadow-sm border p-6 space-y-4">
-          <h3 className="font-semibold flex items-center gap-2">
-            <Brain className="w-4 h-4" /> AI Analysis
-          </h3>
+          <div className="flex items-center justify-between">
+            <h3 className="font-semibold flex items-center gap-2">
+              <Brain className="w-4 h-4" /> AI Analysis
+            </h3>
+            <button
+              onClick={runAnalysis}
+              disabled={analyzing || !call.transcript_text}
+              title={!call.transcript_text ? 'No transcript available yet' : analysis ? 'Re-run AI analysis' : 'Run AI analysis'}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-accent text-accent-foreground hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {analyzing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+              {analysis ? 'Re-run' : 'Run analysis'}
+            </button>
+          </div>
+          {analyzeError && (
+            <div className="p-2 rounded bg-destructive/10 text-destructive text-xs">{analyzeError}</div>
+          )}
           {analysis ? (
             <div className="space-y-3 text-sm">
               <div className="p-3 bg-accent/10 rounded-lg">{analysis.ai_summary}</div>
@@ -183,10 +269,44 @@ export default function AdminCallDetail() {
               )}
             </div>
           ) : (
-            <p className="text-muted-foreground text-center py-8">No AI analysis available for this call.</p>
+            <p className="text-muted-foreground text-center py-8">
+              {call.transcript_text
+                ? 'No AI analysis yet — click Run analysis above.'
+                : 'No transcript available yet. AI analysis runs automatically once a transcript is recorded.'}
+            </p>
           )}
         </div>
       </div>
+
+      {/* Recording */}
+      {(recordingSignedUrl || call.recording_storage_path) && (
+        <div className="bg-card rounded-xl shadow-sm border p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-semibold flex items-center gap-2">
+              <Mic className="w-4 h-4" /> Recording
+            </h3>
+            {call.recording_storage_path && (
+              <button
+                onClick={runTranscribe}
+                disabled={transcribing}
+                title={call.transcript_text ? 'Re-transcribe and re-run AI analysis' : 'Transcribe recording and run AI analysis'}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-accent text-accent-foreground hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {transcribing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                {call.transcript_text ? 'Re-transcribe' : 'Transcribe & analyze'}
+              </button>
+            )}
+          </div>
+          {transcribeError && (
+            <div className="p-2 mb-3 rounded bg-destructive/10 text-destructive text-xs">{transcribeError}</div>
+          )}
+          {recordingSignedUrl ? (
+            <audio controls src={recordingSignedUrl} className="w-full" />
+          ) : (
+            <p className="text-xs text-muted-foreground">Recording stored but signed URL unavailable.</p>
+          )}
+        </div>
+      )}
 
       {/* Transcript */}
       {call.transcript_text && (
