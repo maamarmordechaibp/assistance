@@ -67,49 +67,77 @@ function detectOtp(subject: string | null | undefined, text: string | null | und
 
 // Try a list of candidate Resend endpoints and return the first one that
 // responds with a JSON list. Resend's inbound API has been moving — accept
-// either current or legacy shapes. Returns { url, items } or throws.
+// either current or legacy shapes. Pages through results up to `total` rows
+// using their `has_more`/`last_id` cursor pattern. Resend caps `limit` at 100
+// per request so we always fetch in batches of 100.
 async function fetchInboundFromResend(
   resendKey: string,
-  opts: { limit: number; since?: string },
+  opts: { total: number; since?: string },
 ): Promise<{ url: string; items: ResendInbound[] }> {
-  const candidates = [
-    `https://api.resend.com/inbound/emails?limit=${opts.limit}`,
-    `https://api.resend.com/emails/inbound?limit=${opts.limit}`,
-    `https://api.resend.com/emails?direction=inbound&limit=${opts.limit}`,
-    `https://api.resend.com/emails?type=inbound&limit=${opts.limit}`,
+  // Resend hard cap is 100 per page.
+  const pageSize = Math.min(100, Math.max(1, opts.total));
+  const bases = [
+    'https://api.resend.com/emails/inbound',
+    'https://api.resend.com/inbound/emails',
+    'https://api.resend.com/emails?direction=inbound',
+    'https://api.resend.com/emails?type=inbound',
   ];
   const errors: string[] = [];
-  for (const url of candidates) {
-    try {
-      const r = await fetch(url, {
-        headers: { Authorization: `Bearer ${resendKey}`, Accept: 'application/json' },
-      });
-      const txt = await r.text();
-      if (!r.ok) {
-        errors.push(`${url} -> ${r.status} ${txt.slice(0, 120)}`);
-        continue;
-      }
-      let parsed: unknown;
+
+  for (const base of bases) {
+    const join = base.includes('?') ? '&' : '?';
+    let cursor: string | null = null;
+    const collected: ResendInbound[] = [];
+    let workingUrl: string | null = null;
+    let hadFatalError = false;
+
+    while (collected.length < opts.total) {
+      const url =
+        `${base}${join}limit=${pageSize}` + (cursor ? `&after=${encodeURIComponent(cursor)}` : '');
       try {
-        parsed = JSON.parse(txt);
-      } catch {
-        errors.push(`${url} -> non-JSON response`);
-        continue;
-      }
-      // Resend list payloads are typically `{ data: [...] }` or `{ object: 'list', data: [...] }`.
-      const items =
-        Array.isArray((parsed as { data?: unknown }).data)
-          ? ((parsed as { data: ResendInbound[] }).data)
+        const r = await fetch(url, {
+          headers: { Authorization: `Bearer ${resendKey}`, Accept: 'application/json' },
+        });
+        const txt = await r.text();
+        if (!r.ok) {
+          errors.push(`${url} -> ${r.status} ${txt.slice(0, 160)}`);
+          hadFatalError = true;
+          break;
+        }
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(txt);
+        } catch {
+          errors.push(`${url} -> non-JSON response`);
+          hadFatalError = true;
+          break;
+        }
+        const obj = parsed as { data?: ResendInbound[]; has_more?: boolean };
+        const items: ResendInbound[] | null = Array.isArray(obj?.data)
+          ? obj.data
           : Array.isArray(parsed)
           ? (parsed as ResendInbound[])
           : null;
-      if (!items) {
-        errors.push(`${url} -> unexpected shape: ${txt.slice(0, 120)}`);
-        continue;
+        if (!items) {
+          errors.push(`${url} -> unexpected shape: ${txt.slice(0, 160)}`);
+          hadFatalError = true;
+          break;
+        }
+        if (!workingUrl) workingUrl = url;
+        collected.push(...items);
+        const last = items[items.length - 1];
+        const hasMore = obj?.has_more === true && items.length === pageSize;
+        if (!hasMore || !last?.id) break;
+        cursor = last.id;
+      } catch (err) {
+        errors.push(`${url} -> ${err instanceof Error ? err.message : String(err)}`);
+        hadFatalError = true;
+        break;
       }
-      return { url, items };
-    } catch (err) {
-      errors.push(`${url} -> ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    if (workingUrl && !hadFatalError) {
+      return { url: workingUrl, items: collected.slice(0, opts.total) };
     }
   }
   throw new Error(
@@ -151,12 +179,12 @@ serve(async (req) => {
   }
 
   const body = await req.json().catch(() => ({}));
-  const limit = Math.min(Math.max(Number(body?.limit) || 100, 1), 500);
+  const total = Math.min(Math.max(Number(body?.limit) || 200, 1), 1000);
   const since = typeof body?.since === 'string' ? body.since : undefined;
 
   let inbound: { url: string; items: ResendInbound[] };
   try {
-    inbound = await fetchInboundFromResend(resendKey, { limit, since });
+    inbound = await fetchInboundFromResend(resendKey, { total, since });
   } catch (err) {
     return new Response(
       JSON.stringify({
