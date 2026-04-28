@@ -23,7 +23,7 @@ export default function RepSmsPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let sub: any;
+    let sub: ReturnType<typeof supabase['channel']> | undefined;
     async function load() {
       setLoading(true);
       const { data } = await supabase.from('sms_inbound').select('*').order('received_at', { ascending: false }).limit(40);
