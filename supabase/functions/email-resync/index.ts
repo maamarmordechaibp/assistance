@@ -291,23 +291,33 @@ serve(async (req) => {
       };
 
       if (eventId) {
-        // Upsert by (provider, provider_event_id). Returns row regardless of
-        // insert/update — we count by checking if it already existed first.
+        // Manually upsert (see email-inbound for rationale): the unique index
+        // on (provider, provider_event_id) is partial so PostgREST refuses to
+        // use it with onConflict.
         const { data: existing } = await supabase
           .from('customer_emails')
           .select('id')
           .eq('provider', 'resend')
           .eq('provider_event_id', eventId)
           .maybeSingle();
-        const { error } = await supabase
-          .from('customer_emails')
-          .upsert(row, { onConflict: 'provider,provider_event_id', ignoreDuplicates: false });
-        if (error) {
-          errors.push(`${eventId}: ${error.message}`);
-          continue;
+        if (existing) {
+          const { error } = await supabase
+            .from('customer_emails')
+            .update(row)
+            .eq('id', existing.id);
+          if (error) {
+            errors.push(`${eventId}: ${error.message}`);
+            continue;
+          }
+          updated++;
+        } else {
+          const { error } = await supabase.from('customer_emails').insert(row);
+          if (error) {
+            errors.push(`${eventId}: ${error.message}`);
+            continue;
+          }
+          inserted++;
         }
-        if (existing) updated++;
-        else inserted++;
       } else {
         const { error } = await supabase.from('customer_emails').insert(row);
         if (error) {

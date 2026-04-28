@@ -324,18 +324,44 @@ serve(async (req) => {
 
   let row: { id: string } | null = null;
   if (normalized.provider_event_id) {
-    const { data, error } = await supabase
+    // Manually upsert: check existence first, then update or insert. We avoid
+    // PostgREST's `.upsert(..., { onConflict })` because the underlying
+    // unique index is *partial* (`WHERE provider_event_id IS NOT NULL`) and
+    // PostgREST cannot derive the index predicate — it errors with 42P10.
+    const { data: existing } = await supabase
       .from('customer_emails')
-      .upsert(insertRow, { onConflict: 'provider,provider_event_id', ignoreDuplicates: false })
       .select('id')
+      .eq('provider', normalized.provider)
+      .eq('provider_event_id', normalized.provider_event_id)
       .maybeSingle();
-    if (error) {
-      console.error('[email-inbound] upsert error:', error);
-      return new Response(JSON.stringify({ ok: false, error: error.message }), {
-        status: 500, headers: { 'Content-Type': 'application/json' },
-      });
+    if (existing) {
+      const { data, error } = await supabase
+        .from('customer_emails')
+        .update(insertRow)
+        .eq('id', existing.id)
+        .select('id')
+        .maybeSingle();
+      if (error) {
+        console.error('[email-inbound] update error:', error);
+        return new Response(JSON.stringify({ ok: false, error: error.message }), {
+          status: 500, headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      row = data;
+    } else {
+      const { data, error } = await supabase
+        .from('customer_emails')
+        .insert(insertRow)
+        .select('id')
+        .maybeSingle();
+      if (error) {
+        console.error('[email-inbound] insert error:', error);
+        return new Response(JSON.stringify({ ok: false, error: error.message }), {
+          status: 500, headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      row = data;
     }
-    row = data;
   } else {
     const { data, error } = await supabase
       .from('customer_emails')
