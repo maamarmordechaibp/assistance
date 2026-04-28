@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import Softphone from '@/components/softphone/softphone';
 import ProductSearchPanel from '@/components/rep/product-search-panel';
 import OrdersPanel from '@/components/rep/orders-panel';
+import EmailInbox from '@/components/rep/email-inbox';
 import BrowserLockBadge from '@/components/rep/browser-lock-badge';
 import {
   Phone,
@@ -1306,6 +1307,18 @@ export default function RepDashboard() {
               log a purchase and paste tracking the moment Amazon confirms. */}
           {activeCall && customer && (
             <OrdersPanel customerId={customer.id} callId={activeCall.id} />
+          )}
+
+          {/* Customer's email inbox — surfaces OTP codes, order confirmations,
+              shipping notices etc. for the customer the rep is on a call with. */}
+          {activeCall && customer && (
+            <div className="bg-card rounded-xl shadow-sm border p-4">
+              <EmailInbox
+                customerId={customer.id}
+                title={`${customer.full_name}'s emails`}
+                description="Inbound + outbound messages on this customer's mailbox. OTP codes are auto-detected."
+              />
+            </div>
           )}
 
           {/* Customer Browser (Browserbase) — only visible while on a call */}

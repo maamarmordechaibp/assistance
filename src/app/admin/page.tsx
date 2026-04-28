@@ -14,6 +14,8 @@ import {
   TrendingUp,
   PhoneCall,
   Activity,
+  Mail,
+  Voicemail,
 } from 'lucide-react';
 import { PageHeader, StatCard } from '@/components/ui/page';
 import { Button } from '@/components/ui/button';
@@ -28,6 +30,8 @@ interface Stats {
   flaggedCalls: number;
   pendingCallbacks: number;
   activeCalls: number;
+  unreadEmails: number;
+  newVoicemails: number;
 }
 
 export default function AdminDashboard() {
@@ -50,6 +54,8 @@ export default function AdminDashboard() {
           { count: callbackCount },
           { data: todayPayments },
           { data: activeCalls },
+          { count: unreadEmailCount },
+          { count: newVoicemailCount },
         ] = await Promise.all([
           supabase.from('customers').select('*', { count: 'exact', head: true }),
           supabase.from('reps').select('*', { count: 'exact', head: true }),
@@ -58,6 +64,16 @@ export default function AdminDashboard() {
           supabase.from('callback_requests').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
           supabase.from('payments').select('amount_paid').eq('payment_status', 'completed').gte('created_at', todayISO),
           supabase.from('calls').select('id').is('ended_at', null).not('connected_at', 'is', null),
+          supabase
+            .from('customer_emails')
+            .select('*', { count: 'exact', head: true })
+            .eq('direction', 'inbound')
+            .eq('is_read', false),
+          supabase
+            .from('voicemails')
+            .select('*', { count: 'exact', head: true })
+            .is('played_at', null)
+            .is('archived_at', null),
         ]);
 
         const totalMinutes =
@@ -74,6 +90,8 @@ export default function AdminDashboard() {
           flaggedCalls: flaggedCount || 0,
           pendingCallbacks: callbackCount || 0,
           activeCalls: activeCalls?.length || 0,
+          unreadEmails: unreadEmailCount || 0,
+          newVoicemails: newVoicemailCount || 0,
         });
       } catch (err) {
         console.error('Stats error:', err);
@@ -150,7 +168,27 @@ export default function AdminDashboard() {
         <div className="flex items-baseline justify-between">
           <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Needs attention</h2>
         </div>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Link href="/admin/emails" className="rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <StatCard
+              label="Unread emails"
+              value={stats?.unreadEmails ?? 0}
+              icon={<Mail />}
+              accent={stats && stats.unreadEmails > 0 ? 'warning' : 'default'}
+              hint="New inbound messages waiting to be reviewed"
+              loading={loading}
+            />
+          </Link>
+          <Link href="/admin/voicemails" className="rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <StatCard
+              label="New voicemails"
+              value={stats?.newVoicemails ?? 0}
+              icon={<Voicemail />}
+              accent={stats && stats.newVoicemails > 0 ? 'warning' : 'default'}
+              hint="Unplayed voicemails left via the IVR"
+              loading={loading}
+            />
+          </Link>
           <Link href="/admin/calls?filter=flagged" className="rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring">
             <StatCard
               label="Flagged calls"
@@ -161,16 +199,14 @@ export default function AdminDashboard() {
               loading={loading}
             />
           </Link>
-          <Link href="/admin/voicemails" className="rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring">
-            <StatCard
-              label="Pending callbacks"
-              value={stats?.pendingCallbacks ?? 0}
-              icon={<PhoneCall />}
-              accent={stats && stats.pendingCallbacks > 0 ? 'warning' : 'default'}
-              hint="Customers waiting for a return call"
-              loading={loading}
-            />
-          </Link>
+          <StatCard
+            label="Pending callbacks"
+            value={stats?.pendingCallbacks ?? 0}
+            icon={<PhoneCall />}
+            accent={stats && stats.pendingCallbacks > 0 ? 'warning' : 'default'}
+            hint="Customers waiting for a return call"
+            loading={loading}
+          />
         </div>
       </section>
 
