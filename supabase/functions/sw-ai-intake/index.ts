@@ -90,6 +90,8 @@ const BRIEF_PROMPT = `You are producing a short briefing for a live phone repres
 
 CRITICAL: Read EVERY user message in the conversation below. Combine ALL the details the caller shared across the whole intake (what they need, which company/site, which item, their budget, dates, account info, constraints). The brief MUST reflect the COMPLETE picture — if the caller first said "I need help filling a form" and later said "the I-765 on USCIS.gov for my daughter", your summary must mention I-765, USCIS, and that it is for their daughter.
 
+ABSOLUTE NO-FABRICATION RULE: You may ONLY use facts the caller literally said in the conversation. NEVER guess, NEVER infer a category, NEVER add "for a car" / "for a bike" / "for college" / "for a child" unless the caller explicitly said it. If the caller said "I need a replacement back wheel", write "replacement back wheel" — do NOT add "for a car" or "for a bike". Speech-to-text is imperfect; if a word seems odd, keep it as-is. Inventing details makes the rep useless.
+
 You have shopping-specific knowledge to enrich brief when relevant:
 - Office furniture: budget desks $50-$150 (Amazon Basics, VIVO), mid $150-$400 (Sauder), standing $200-$600 (FlexiSpot, Uplift)
 - Laptops: budget $200-$500 (Acer Aspire, Lenovo IdeaPad), mid $500-$900 (Dell Inspiron, HP Envy), premium $900+ (MacBook Air, Dell XPS, ThinkPad X1)

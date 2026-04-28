@@ -240,6 +240,12 @@ export default function AdminCallDetail() {
           )}
           {analysis ? (
             <div className="space-y-3 text-sm">
+              {(analysis.ai_summary || '').toLowerCase().startsWith('[no audio]') && (
+                <div className="p-2 rounded bg-warning/10 text-warning text-xs flex items-start gap-2">
+                  <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                  <span>This analysis was generated without a real audio transcript — based only on the AI intake summary and rep notes. Rep performance was not evaluated.</span>
+                </div>
+              )}
               <div className="p-3 bg-accent/10 rounded-lg">{analysis.ai_summary}</div>
               <div className="grid grid-cols-2 gap-3">
                 <div><span className="text-muted-foreground">Category:</span> {analysis.ai_category}</div>

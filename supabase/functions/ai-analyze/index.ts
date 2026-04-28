@@ -6,6 +6,8 @@ import { createServiceClient } from '../_shared/supabase.ts';
 const SYSTEM_PROMPT = `You are a call quality analyst for a live phone assistance service. 
 Customers call in to get help with online tasks like shopping, filling applications, account help, scheduling, bill payment, and general internet assistance.
 
+ABSOLUTE NO-FABRICATION RULE: Use ONLY facts that literally appear in the transcript provided. NEVER infer a category, item, or context that wasn't said. If the transcript mentions "back wheel", do NOT assume "car wheel" or "bike wheel" — say "replacement back wheel". If a recording transcript is absent (transcript_source = intake_brief_only), you have NOT heard the actual conversation — you ONLY have what the intake AI claimed and what the rep typed in their notes. In that case do not judge the rep at all.
+
 Analyze the provided call transcript and return a JSON object with these fields:
 - ai_summary: A concise 2-3 sentence summary of what happened in the call
 - ai_category: The primary task category (online_shopping, application_filling, account_help, scheduling, bill_payment, government_forms, general_online_help, other)
@@ -75,7 +77,27 @@ serve(async (req) => {
     }
 
     const durationMinutes = Math.round((call.total_duration_seconds || 0) / 60);
-    let userPrompt = `Call transcript:\n${call.transcript_text}\n\nCall duration: ${durationMinutes} minutes\n`;
+
+    // Determine the QUALITY of the input we're working with. If we never got
+    // a real audio transcript (recording failed / SignalWire didn't return
+    // one in time), the only "transcript" we have is the AI intake brief and
+    // the rep's notes. In that case the model MUST NOT judge rep performance,
+    // sentiment, or wasted time — it has no actual dialogue to evaluate.
+    const transcript = call.transcript_text as string;
+    const hasRealAudio = /CALL AUDIO TRANSCRIPT:/i.test(transcript);
+    const transcriptSource = hasRealAudio
+      ? 'whisper_audio'
+      : 'intake_brief_only';
+
+    let userPrompt = `Call transcript:\n${transcript}\n\nCall duration: ${durationMinutes} minutes\n`;
+    userPrompt += `Transcript source: ${transcriptSource}\n`;
+    if (!hasRealAudio) {
+      userPrompt += `\nIMPORTANT: There is NO recorded audio transcript for this call — only the AI intake summary and the rep's own notes. You have NOT seen what was actually said between the rep and customer. Therefore:\n` +
+        `  • Do NOT judge rep performance, fluency, or wasted time. Set ai_wasted_time_flag=false.\n` +
+        `  • Set ai_sentiment to "neutral" and ai_success_status to "partially_successful" unless rep notes or findings clearly prove otherwise.\n` +
+        `  • Set ai_confidence_score to AT MOST 0.4.\n` +
+        `  • Your ai_summary MUST start with "[no audio]" and only describe the stated request — do NOT invent context (do not add "for a car", "for a child", etc. unless those words literally appear).\n`;
+    }
     if (call.task_category?.name) userPrompt += `Assigned task category: ${call.task_category.name}\n`;
     if (benchmark?.expected_min_minutes && benchmark?.expected_max_minutes) {
       userPrompt += `Expected duration range: ${benchmark.expected_min_minutes}-${benchmark.expected_max_minutes} minutes\n`;
