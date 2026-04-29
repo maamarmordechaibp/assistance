@@ -46,7 +46,7 @@ export function IdleWarningModal({
               Are you still there?
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              You'll be clocked out automatically in{' '}
+              You&apos;ll be clocked out automatically in{' '}
               <span className="font-mono font-semibold tabular-nums">{remaining}s</span>{' '}
               due to inactivity.
             </p>
@@ -54,7 +54,7 @@ export function IdleWarningModal({
         </div>
         <div className="mt-5 flex justify-end">
           <Button onClick={onStayActive} autoFocus>
-            I'm still here
+            I&apos;m still here
           </Button>
         </div>
       </div>
