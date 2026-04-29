@@ -15,6 +15,8 @@ import {
   ExternalLink,
   X,
   Reply,
+  Forward,
+  Trash2,
   Send,
   PenSquare,
   Loader2,
@@ -56,6 +58,7 @@ interface PlatformEmail {
   is_read: boolean;
   starred: boolean;
   received_at: string;
+  raw_payload: Record<string, unknown> | null;
 }
 
 function copy(s: string) {
@@ -248,7 +251,7 @@ export default function PlatformInboxPage() {
     setLoading(true);
     const { data, error } = await supabase
       .from('platform_emails')
-      .select('id, mailbox, direction, from_address, from_name, to_addresses, cc_addresses, reply_to, subject, text_body, html_body, snippet, message_id, is_read, starred, received_at')
+      .select('id, mailbox, direction, from_address, from_name, to_addresses, cc_addresses, reply_to, subject, text_body, html_body, snippet, message_id, is_read, starred, received_at, raw_payload')
       .order('received_at', { ascending: false })
       .limit(300);
     if (error) {
@@ -283,6 +286,45 @@ export default function PlatformInboxPage() {
     setEmails((prev) => prev.map((e) => e.id === id ? { ...e, starred: !current } : e));
   }, [supabase]);
 
+  const deleteEmail = useCallback(async (id: string) => {
+    if (!confirm('Delete this email permanently?')) return;
+    const { error } = await supabase.from('platform_emails').delete().eq('id', id);
+    if (error) {
+      toast.error('Delete failed: ' + error.message);
+      return;
+    }
+    setEmails((prev) => prev.filter((e) => e.id !== id));
+    setSelectedId((cur) => (cur === id ? null : cur));
+    toast.success('Deleted');
+  }, [supabase]);
+
+  // Some inbound webhooks landed bodies inside `raw_payload` rather than
+  // text_body/html_body (we have a backfill migration but new providers
+  // can still slip through). Pull the most likely keys at render time so
+  // we never display "No body content" when a body actually exists.
+  const extractBodyFromRaw = (raw: Record<string, unknown> | null | undefined): { text: string | null; html: string | null } => {
+    const result = { text: null as string | null, html: null as string | null };
+    if (!raw || typeof raw !== 'object') return result;
+    const get = (path: string[]): string | null => {
+      let cur: unknown = raw;
+      for (const k of path) {
+        if (!cur || typeof cur !== 'object') return null;
+        cur = (cur as Record<string, unknown>)[k];
+      }
+      return typeof cur === 'string' && cur.trim() ? cur : null;
+    };
+    result.text =
+      get(['text']) ?? get(['TextBody']) ?? get(['plain']) ?? get(['body_plain']) ??
+      get(['data','text']) ?? get(['message','text']) ?? get(['message','body','text']) ??
+      get(['email','text']) ?? get(['payload','text']) ?? get(['stripped_text']) ??
+      get(['body-plain']);
+    result.html =
+      get(['html']) ?? get(['HtmlBody']) ?? get(['html_body']) ?? get(['body_html']) ??
+      get(['data','html']) ?? get(['message','html']) ?? get(['message','body','html']) ??
+      get(['email','html']) ?? get(['payload','html']) ?? get(['stripped_html']) ??
+      get(['body-html']);
+    return result;
+  };
   const filtered = useMemo(() => {
     let rows = emails;
     if (tab !== 'all') rows = rows.filter((e) => e.mailbox === tab);
@@ -478,10 +520,12 @@ export default function PlatformInboxPage() {
                       onClick={() => {
                         const addr = selected.reply_to || selected.from_address || '';
                         const subj = selected.subject ? `Re: ${selected.subject}` : '';
-                        const quoted = selected.text_body
+                        const fallback = extractBodyFromRaw(selected.raw_payload);
+                        const bodyText = selected.text_body ?? fallback.text ?? '';
+                        const quoted = bodyText
                           ? '\n\n---\nOn ' + formatDateTime(selected.received_at) +
                             ', ' + (selected.from_address || 'sender') + ' wrote:\n' +
-                            selected.text_body.split('\n').map((l) => '> ' + l).join('\n')
+                            bodyText.split('\n').map((l) => '> ' + l).join('\n')
                           : '';
                         setComposeDefaults({
                           from: selected.mailbox as Exclude<MailboxKey, 'all'>,
@@ -496,6 +540,40 @@ export default function PlatformInboxPage() {
                       <Reply className="size-4" />
                     </Button>
                   ) : null}
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    title="Forward"
+                    onClick={() => {
+                      const subj = selected.subject ? `Fwd: ${selected.subject}` : 'Fwd:';
+                      const fallback = extractBodyFromRaw(selected.raw_payload);
+                      const bodyText = selected.text_body ?? fallback.text ?? '';
+                      const fwd =
+                        '\n\n---------- Forwarded message ----------\n' +
+                        `From: ${selected.from_name ? selected.from_name + ' <' + (selected.from_address || '') + '>' : (selected.from_address || '(unknown)')}\n` +
+                        `Date: ${formatDateTime(selected.received_at)}\n` +
+                        `Subject: ${selected.subject || '(no subject)'}\n` +
+                        `To: ${selected.mailbox}\n\n` +
+                        (bodyText || '(no plain-text body)');
+                      setComposeDefaults({
+                        from: selected.mailbox as Exclude<MailboxKey, 'all'>,
+                        to: '',
+                        subject: subj,
+                        body: fwd,
+                      });
+                      setComposeOpen(true);
+                    }}
+                  >
+                    <Forward className="size-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    title="Delete"
+                    onClick={() => deleteEmail(selected.id)}
+                  >
+                    <Trash2 className="size-4 text-destructive" />
+                  </Button>
                   <Button variant="ghost" size="icon-sm" onClick={() => setSelectedId(null)}>
                     <X className="size-4" />
                   </Button>
@@ -504,21 +582,30 @@ export default function PlatformInboxPage() {
 
               {/* Body */}
               <div className="flex-1 overflow-y-auto p-4 text-sm">
-                {selected.html_body ? (
-                  <iframe
-                    srcDoc={selected.html_body}
-                    sandbox="allow-popups"
-                    className="w-full min-h-64 border-0 rounded"
-                    title="Email body"
-                    style={{ height: '100%', minHeight: '300px' }}
-                  />
-                ) : selected.text_body ? (
-                  <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-foreground">
-                    {selected.text_body}
-                  </pre>
-                ) : (
-                  <p className="text-muted-foreground italic">No body content.</p>
-                )}
+                {(() => {
+                  const fallback = extractBodyFromRaw(selected.raw_payload);
+                  const html = selected.html_body ?? fallback.html;
+                  const text = selected.text_body ?? fallback.text;
+                  if (html) {
+                    return (
+                      <iframe
+                        srcDoc={html}
+                        sandbox="allow-popups"
+                        className="w-full min-h-64 border-0 rounded"
+                        title="Email body"
+                        style={{ height: '100%', minHeight: '300px' }}
+                      />
+                    );
+                  }
+                  if (text) {
+                    return (
+                      <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-foreground">
+                        {text}
+                      </pre>
+                    );
+                  }
+                  return <p className="text-muted-foreground italic">No body content.</p>;
+                })()}
               </div>
 
               {/* Links extracted from plain text */}

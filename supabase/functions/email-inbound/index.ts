@@ -296,6 +296,36 @@ serve(async (req) => {
   const normalized: NormalizedEmail | null =
     fromResend(raw) || fromPostmark(raw) || fromSendgrid(raw) || fromCloudflare(raw);
 
+  // Body fallback: if a parser claimed the email but didn't extract text/html
+  // (or a future provider lands here without a dedicated parser path), look
+  // for the body inside common JSON keys before persisting.
+  if (normalized) {
+    const getStr = (path: string[]): string | null => {
+      let cur: unknown = raw;
+      for (const k of path) {
+        if (!cur || typeof cur !== 'object') return null;
+        cur = (cur as Record<string, unknown>)[k];
+      }
+      return typeof cur === 'string' && cur.trim() ? cur : null;
+    };
+    if (!normalized.text_body) {
+      normalized.text_body =
+        getStr(['text']) || getStr(['TextBody']) || getStr(['plain']) ||
+        getStr(['body_plain']) || getStr(['data', 'text']) ||
+        getStr(['message', 'text']) || getStr(['message', 'body', 'text']) ||
+        getStr(['email', 'text']) || getStr(['payload', 'text']) ||
+        getStr(['stripped_text']) || getStr(['body-plain']);
+    }
+    if (!normalized.html_body) {
+      normalized.html_body =
+        getStr(['html']) || getStr(['HtmlBody']) || getStr(['html_body']) ||
+        getStr(['body_html']) || getStr(['data', 'html']) ||
+        getStr(['message', 'html']) || getStr(['message', 'body', 'html']) ||
+        getStr(['email', 'html']) || getStr(['payload', 'html']) ||
+        getStr(['stripped_html']) || getStr(['body-html']);
+    }
+  }
+
   if (!normalized || !normalized.mailbox) {
     console.warn('[email-inbound] could not parse payload — keys:', Object.keys(raw).slice(0, 20));
     return new Response(JSON.stringify({ ok: false, error: 'unrecognised payload' }), {
