@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { edgeFn } from '@/lib/supabase/edge';
+import SmsMediaPicker from '@/components/sms/SmsMediaPicker';
 const supabase = createClient();
 
 const RAW_SMS_NUMBER = process.env.NEXT_PUBLIC_SMS_RECEIVE_NUMBER ?? '+18459357587';
@@ -30,7 +31,6 @@ export default function AdminSmsPage() {
   const [composeTo, setComposeTo] = useState('');
   const [composeMsg, setComposeMsg] = useState('');
   const [composeMedia, setComposeMedia] = useState('');
-  const [showMedia, setShowMedia] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [sendSuccess, setSendSuccess] = useState<string | null>(null);
@@ -123,24 +123,7 @@ export default function AdminSmsPage() {
           rows={3}
           className="w-full px-3 py-2 rounded-lg border bg-background text-sm resize-none focus:outline-none focus:ring-2 focus:ring-accent"
         />
-        <div className="flex items-center gap-2 flex-wrap">
-          <button
-            type="button"
-            onClick={() => setShowMedia(v => !v)}
-            className="text-xs text-accent underline"
-          >
-            {showMedia ? 'Remove image (MMS)' : '+ Attach image URL (MMS)'}
-          </button>
-        </div>
-        {showMedia && (
-          <input
-            type="url"
-            placeholder="https://â€¦ (publicly accessible image URL)"
-            value={composeMedia}
-            onChange={e => setComposeMedia(e.target.value)}
-            className="w-full px-3 py-2 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-accent"
-          />
-        )}
+        <SmsMediaPicker value={composeMedia} onChange={setComposeMedia} />
         {sendError && <p className="text-sm text-destructive">{sendError}</p>}
         {sendSuccess && <p className="text-sm text-green-600 dark:text-green-400">{sendSuccess}</p>}
         <button
