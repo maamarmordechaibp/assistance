@@ -233,6 +233,15 @@ function fromCloudflare(p: Record<string, unknown>): NormalizedEmail | null {
   };
 }
 
+// ── Platform-level mailboxes ────────────────────────────────────
+// Emails addressed to these are stored in `platform_emails` (admin-only)
+// instead of `customer_emails`. Add or remove addresses here as needed.
+const PLATFORM_MAILBOXES = new Set([
+  'office@offlinesbrowse.com',
+  'complaints@offlinesbrowse.com',
+  'admin@offlinesbrowse.com',
+]);
+
 // ── Entry ────────────────────────────────────────────────────────
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok');
@@ -295,6 +304,88 @@ serve(async (req) => {
   }
 
   const supabase = createServiceClient();
+
+  // ── Platform inbox routing ───────────────────────────────────────────────
+  // Emails to office@, complaints@, or admin@ go into `platform_emails` and
+  // are never visible to reps. We skip customer lookup and order-ingest.
+  if (PLATFORM_MAILBOXES.has(normalized.mailbox)) {
+    const platformSnippet = snippetOf(normalized.text_body);
+    const platformRow = {
+      mailbox: normalized.mailbox,
+      direction: 'inbound' as const,
+      from_address: normalized.from_address,
+      from_name: normalized.from_name,
+      to_addresses: normalized.to_addresses,
+      cc_addresses: normalized.cc_addresses,
+      reply_to: normalized.reply_to,
+      subject: normalized.subject,
+      text_body: normalized.text_body,
+      html_body: normalized.html_body,
+      snippet: platformSnippet,
+      message_id: normalized.message_id,
+      in_reply_to: normalized.in_reply_to,
+      provider: normalized.provider,
+      provider_event_id: normalized.provider_event_id,
+      raw_payload: raw,
+      received_at: normalized.received_at,
+    };
+
+    let platformId: string | null = null;
+    if (normalized.provider_event_id) {
+      const { data: existing } = await supabase
+        .from('platform_emails')
+        .select('id')
+        .eq('provider', normalized.provider)
+        .eq('provider_event_id', normalized.provider_event_id)
+        .maybeSingle();
+      if (existing) {
+        const { data, error } = await supabase
+          .from('platform_emails')
+          .update(platformRow)
+          .eq('id', existing.id)
+          .select('id')
+          .maybeSingle();
+        if (error) {
+          console.error('[email-inbound] platform update error:', error);
+          return new Response(JSON.stringify({ ok: false, error: error.message }), {
+            status: 500, headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        platformId = data?.id ?? null;
+      } else {
+        const { data, error } = await supabase
+          .from('platform_emails')
+          .insert(platformRow)
+          .select('id')
+          .maybeSingle();
+        if (error) {
+          console.error('[email-inbound] platform insert error:', error);
+          return new Response(JSON.stringify({ ok: false, error: error.message }), {
+            status: 500, headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        platformId = data?.id ?? null;
+      }
+    } else {
+      const { data, error } = await supabase
+        .from('platform_emails')
+        .insert(platformRow)
+        .select('id')
+        .maybeSingle();
+      if (error) {
+        console.error('[email-inbound] platform insert error:', error);
+        return new Response(JSON.stringify({ ok: false, error: error.message }), {
+          status: 500, headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      platformId = data?.id ?? null;
+    }
+
+    console.log(`[email-inbound] platform mailbox=${normalized.mailbox} id=${platformId} subject="${(normalized.subject || '').slice(0, 80)}"`);
+    return new Response(JSON.stringify({ ok: true, id: platformId }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
 
   // Resolve the customer by mailbox.
   let customerId: string | null = null;
