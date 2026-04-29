@@ -36,27 +36,69 @@ serve(async (req) => {
       break;
     }
     case 'exp': {
-      const cardNum = digits;
+      // Guard: caller pressed `#` without entering digits, or Gather timed out.
+      // Without this guard we'd advance with cardNum="" and silently lose the
+      // card number, then ask for expiration. Re-prompt for the card instead.
+      const cardNum = (digits || '').trim();
+      if (cardNum.length < 13) {
+        elements.push(laml.say("I didn't receive a complete card number. Let's try that again."));
+        elements.push(laml.redirect(`${baseUrl}/sw-payment-gather?step=card&customerId=${customerId}&packageId=${packageId}`));
+        break;
+      }
       elements.push(
         laml.gather(
           { input: 'dtmf', numDigits: 4, action: `${baseUrl}/sw-payment-gather?step=cvv&customerId=${customerId}&packageId=${packageId}&cn=${cardNum}`, timeout: 20, finishOnKey: '#' },
           [laml.say('Thank you. Please enter your card expiration date as four digits. For example, for January 2026, enter 0 1 2 6.')]
         )
       );
-      elements.push(laml.say('We did not receive your expiration date.'));
+      // Fallback re-prompts the EXP step (preserves the card number) instead
+      // of bouncing the caller all the way back to the card-number prompt.
+      elements.push(laml.say('We did not receive your expiration date. Please try again.'));
+      elements.push(laml.redirect(`${baseUrl}/sw-payment-gather?step=exp-retry&customerId=${customerId}&packageId=${packageId}&cn=${cardNum}`));
+      break;
+    }
+    case 'exp-retry': {
+      // Re-prompt for the expiration date without losing the captured card.
+      const cardNum = url.searchParams.get('cn') || '';
+      elements.push(
+        laml.gather(
+          { input: 'dtmf', numDigits: 4, action: `${baseUrl}/sw-payment-gather?step=cvv&customerId=${customerId}&packageId=${packageId}&cn=${cardNum}`, timeout: 20, finishOnKey: '#' },
+          [laml.say('Please enter your card expiration date as four digits, for example zero one two six for January 2026, then press pound.')]
+        )
+      );
+      elements.push(laml.say("We still didn't catch that. Let's start over."));
       elements.push(laml.redirect(`${baseUrl}/sw-payment-gather?step=card&customerId=${customerId}&packageId=${packageId}`));
       break;
     }
     case 'cvv': {
       const cardNum = url.searchParams.get('cn') || '';
-      const exp = digits;
+      // Guard: caller pressed `#` without entering an expiration date.
+      const exp = (digits || '').trim();
+      if (exp.length !== 4 || !cardNum) {
+        elements.push(laml.say("I didn't catch your expiration date. Let's try that again."));
+        elements.push(laml.redirect(`${baseUrl}/sw-payment-gather?step=exp-retry&customerId=${customerId}&packageId=${packageId}&cn=${cardNum}`));
+        break;
+      }
       elements.push(
         laml.gather(
           { input: 'dtmf', numDigits: 4, action: `${baseUrl}/sw-payment-gather?step=process&customerId=${customerId}&packageId=${packageId}&cn=${cardNum}&exp=${exp}`, timeout: 20, finishOnKey: '#' },
           [laml.say('Please enter your 3 or 4 digit security code on the back of your card, followed by the pound key.')]
         )
       );
-      elements.push(laml.say('We did not receive your security code.'));
+      elements.push(laml.say('We did not receive your security code. Please try again.'));
+      elements.push(laml.redirect(`${baseUrl}/sw-payment-gather?step=cvv-retry&customerId=${customerId}&packageId=${packageId}&cn=${cardNum}&exp=${exp}`));
+      break;
+    }
+    case 'cvv-retry': {
+      const cardNum = url.searchParams.get('cn') || '';
+      const exp = url.searchParams.get('exp') || '';
+      elements.push(
+        laml.gather(
+          { input: 'dtmf', numDigits: 4, action: `${baseUrl}/sw-payment-gather?step=process&customerId=${customerId}&packageId=${packageId}&cn=${cardNum}&exp=${exp}`, timeout: 20, finishOnKey: '#' },
+          [laml.say('Please enter your 3 or 4 digit security code, then press pound.')]
+        )
+      );
+      elements.push(laml.say("We still didn't catch that. Let's start over."));
       elements.push(laml.redirect(`${baseUrl}/sw-payment-gather?step=card&customerId=${customerId}&packageId=${packageId}`));
       break;
     }

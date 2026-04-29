@@ -7,34 +7,19 @@ export function buildLamlResponse(elements: string[]): string {
 // ── Voice configuration ───────────────────────────────────────────────────
 // We default to `Polly.Stephen-Neural` — Amazon's most conversational and
 // expressive American-male Neural voice. It sounds noticeably more "alive"
-// than Matthew (which is neutral/news-anchor). Customers regularly described
-// the previous voice as "robotic" / "too AI" — Stephen reads with natural
-// intonation, slight enthusiasm, and conversational pacing.
+// than Matthew (which is neutral/news-anchor). The Neural prosody engine
+// already handles natural intonation; we feed it plain text (NOT SSML)
+// because SignalWire's LaML <Say> does not parse <speak> tags — passing
+// SSML would result in silence on the call.
 //
-// Voice can be overridden per-call by passing the `voice` arg, and globally
-// at runtime by reading the `ivr_voice` row from `admin_settings` (see
-// `_shared/voiceConfig.ts`).
-//
-// Other tested male alternatives if Stephen ever sounds off in production:
+// Other tested male alternatives:
 //   - Polly.Gregory-Neural (deeper, slower, more authoritative)
 //   - Polly.Matthew-Neural (neutral, professional)
 //   - Polly.Brian-Neural   (British)
 const DEFAULT_VOICE = 'Polly.Stephen-Neural';
 
-/** Wrap a plain string in SSML <speak><prosody> so the Neural voice reads
- *  with a touch more energy and a warmer, conversational pace. Polly Neural
- *  voices accept SSML when the <Say> body starts with `<speak>`. */
-function ssmlWrap(text: string): string {
-  // Safe defaults: keep rate at "medium", nudge pitch up ~2% for warmth,
-  // medium emphasis. Tweaking too aggressively makes Stephen sound cartoony.
-  return `<speak><prosody rate="medium" pitch="+2%">${text}</prosody></speak>`;
-}
-
 export function say(text: string, voice: string = DEFAULT_VOICE): string {
-  // SSML body — escape the user-supplied text but leave our own <speak>
-  // tags un-escaped (we control them).
-  const inner = ssmlWrap(escapeXml(text));
-  return `  <Say voice="${voice}">${inner}</Say>`;
+  return `  <Say voice="${voice}">${escapeXml(text)}</Say>`;
 }
 
 /** Speak multiple lines as ONE continuous utterance so the Neural voice's

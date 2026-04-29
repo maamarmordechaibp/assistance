@@ -556,15 +556,185 @@ serve(async (req) => {
     return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
   }
 
-  // ── Fast-path response (returning caller pressed 0 after greeting) ──
-  //   0 → AI intake (rep). Anything else → full menu.
+  // ── Fast-path response (returning caller pressed a digit after greeting) ──
+  //   0 → live agent (via AI intake when enabled).
+  //   1 → tracking submenu.
+  //   2 → buy minutes (package list).
+  //   3 → extension dial.
+  //   * → full main menu.
+  //   anything else → replay menu.
   if (step === 'fast-rep' && customerId && digits) {
     const elements: string[] = [];
-    if (digits === '0') {
-      elements.push(laml.redirect(`${baseUrl}/sw-ai-intake?customerId=${customerId}`));
+    switch (digits) {
+      case '0':
+        // Live agent — go through agent-menu's "1" path so the AI-intake
+        // admin toggle is honored. We re-check the toggle here to avoid a
+        // separate redirect hop: AI intake when on, plain connect-rep when off.
+        {
+          let aiEnabled = true;
+          try {
+            const { data: setting } = await supabase
+              .from('admin_settings')
+              .select('value')
+              .eq('key', 'ai_intake_enabled')
+              .maybeSingle();
+            if (setting && typeof setting.value === 'boolean') aiEnabled = setting.value;
+            else if (setting && setting.value !== null && setting.value !== undefined) aiEnabled = String(setting.value).toLowerCase() !== 'false';
+            else aiEnabled = (Deno.env.get('AI_INTAKE_ENABLED') ?? 'true').toLowerCase() !== 'false';
+          } catch {
+            aiEnabled = (Deno.env.get('AI_INTAKE_ENABLED') ?? 'true').toLowerCase() !== 'false';
+          }
+          if (aiEnabled) {
+            elements.push(laml.redirect(`${baseUrl}/sw-ai-intake?customerId=${customerId}`));
+          } else {
+            elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=connect-rep&customerId=${customerId}`));
+          }
+        }
+        break;
+      case '1': // tracking submenu
+        elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=tracking-menu&customerId=${customerId}`));
+        break;
+      case '2': // buy minutes
+        elements.push(laml.redirect(`${baseUrl}/sw-package-select?customerId=${customerId}`));
+        break;
+      case '3': // extension dial
+        elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=extension&customerId=${customerId}`));
+        break;
+      case '*':
+        elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
+        break;
+      default:
+        elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
+        break;
+    }
+    return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+  }
+
+  // ── New-caller intake choice ──
+  //   1 = open account / talk to a rep (with note)
+  //   2 = caller has account on a different phone number → gather 10 digits
+  //   anything else → fall through to the full main menu
+  if (step === 'new-caller-choice' && customerId) {
+    const elements: string[] = [];
+    if (digits === '1') {
+      try {
+        await supabase
+          .from('calls')
+          .update({ ai_intake_brief: 'New caller requested to open an account or speak with a representative.' })
+          .eq('call_sid', callSid);
+      } catch (err) {
+        console.error('[sw-inbound] new-caller note write failed:', err);
+      }
+      elements.push(laml.say("Great — I'll connect you with a representative who can help you set up your account. Please hold."));
+      elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=connect-rep&customerId=${customerId}&category=new_account`));
+    } else if (digits === '2') {
+      elements.push(laml.gather(
+        { input: 'dtmf', numDigits: 10, action: `${baseUrl}/sw-inbound?step=alt-phone-confirm&customerId=${customerId}`, timeout: 20, finishOnKey: '#' },
+        [laml.say('Please enter the 10 digit phone number that your account is on, then press pound.')]
+      ));
+      elements.push(laml.say("I didn't catch that. Let me take you to the main menu."));
+      elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
+    } else if (digits === '*') {
+      elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
     } else {
+      // Any other digit → main menu
       elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
     }
+    return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+  }
+
+  // ── Alt-phone lookup: caller said their account is on a different number ──
+  //   Repeats the digits back, asks for confirmation. On confirm we attach
+  //   the original (auto-stub) call to the real customer and add a phone
+  //   alias so future calls from this number find the right account.
+  if (step === 'alt-phone-confirm' && customerId) {
+    const elements: string[] = [];
+    const altDigits = (digits || '').replace(/[^0-9]/g, '');
+    if (altDigits.length !== 10) {
+      elements.push(laml.say("That phone number didn't have 10 digits. Let's try again."));
+      elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=new-caller-choice&customerId=${customerId}`));
+      return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+    }
+    const e164 = `+1${altDigits}`;
+    const spoken = altDigits.split('').join(' ');
+    elements.push(laml.gather(
+      { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=alt-phone-link&customerId=${customerId}&alt=${e164}`, timeout: 8 },
+      [laml.say(`I heard ${spoken}. If that's correct, press 1. To try again, press 2.`)]
+    ));
+    elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
+    return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+  }
+
+  if (step === 'alt-phone-link' && customerId) {
+    const elements: string[] = [];
+    const altE164 = url.searchParams.get('alt') || '';
+    if (digits === '2') {
+      elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=new-caller-choice&customerId=${customerId}`));
+      return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+    }
+    if (digits !== '1' || !altE164) {
+      elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
+      return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+    }
+    // Look up the customer on the supplied alt number.
+    const altDigits10 = altE164.replace(/[^0-9]/g, '').slice(-10);
+    const altVariants = [altE164, `1${altDigits10}`, altDigits10, `+${altDigits10}`];
+    const { data: altCust } = await supabase
+      .from('customers')
+      .select('id, full_name')
+      .in('primary_phone', altVariants)
+      .eq('status', 'active')
+      .maybeSingle();
+    let realCustomerId: string | null = altCust?.id ?? null;
+    if (!realCustomerId) {
+      const { data: aliasMatch } = await supabase
+        .from('customer_phone_aliases')
+        .select('customer_id, customers!inner(id, full_name)')
+        .in('phone', altVariants)
+        .maybeSingle();
+      // deno-lint-ignore no-explicit-any
+      realCustomerId = (aliasMatch as any)?.customer_id ?? null;
+    }
+
+    if (!realCustomerId) {
+      elements.push(laml.say("I couldn't find an account with that number. Let me connect you with a representative who can help you out."));
+      elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=connect-rep&customerId=${customerId}&category=phone_lookup_failed`));
+      return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+    }
+
+    // Attach the in-flight calls row to the real customer and add the
+    // current phone as an alias on the real customer so future inbound
+    // calls from this number land on the same account.
+    try {
+      await supabase.from('calls').update({ customer_id: realCustomerId }).eq('call_sid', callSid);
+      const fromDigits2 = (from || '').replace(/[^0-9]/g, '');
+      const fromE164 = fromDigits2.length === 10
+        ? `+1${fromDigits2}`
+        : fromDigits2.length === 11 && fromDigits2.startsWith('1')
+          ? `+${fromDigits2}`
+          : (from || '');
+      if (fromE164) {
+        await supabase
+          .from('customer_phone_aliases')
+          .upsert({ customer_id: realCustomerId, phone: fromE164 }, { onConflict: 'phone', ignoreDuplicates: true });
+      }
+      // Optionally clean up the auto-created stub if it's still a "Caller +1..." row.
+      if (customerId !== realCustomerId) {
+        const { data: stub } = await supabase
+          .from('customers')
+          .select('full_name')
+          .eq('id', customerId)
+          .maybeSingle();
+        if (stub?.full_name?.startsWith('Caller ')) {
+          await supabase.from('customers').delete().eq('id', customerId);
+        }
+      }
+    } catch (err) {
+      console.error('[sw-inbound] alt-phone link error:', err);
+    }
+
+    elements.push(laml.say(`Got it — welcome back, ${altCust?.full_name ?? 'thanks for calling'}.`));
+    elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${realCustomerId}`));
     return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
   }
 
@@ -650,7 +820,26 @@ serve(async (req) => {
     }
     switch (digits) {
       case '1': { // next available agent — optionally via AI intake
-        const aiEnabled = (Deno.env.get('AI_INTAKE_ENABLED') ?? 'true').toLowerCase() !== 'false';
+        // Toggle is now stored in admin_settings.ai_intake_enabled (boolean).
+        // Falls back to env var, then defaults to true if neither is set.
+        let aiEnabled = true;
+        try {
+          const { data: setting } = await supabase
+            .from('admin_settings')
+            .select('value')
+            .eq('key', 'ai_intake_enabled')
+            .maybeSingle();
+          if (setting && typeof setting.value === 'boolean') {
+            aiEnabled = setting.value;
+          } else if (setting && setting.value !== null && setting.value !== undefined) {
+            // Tolerate stringly-stored values like "true"/"false".
+            aiEnabled = String(setting.value).toLowerCase() !== 'false';
+          } else {
+            aiEnabled = (Deno.env.get('AI_INTAKE_ENABLED') ?? 'true').toLowerCase() !== 'false';
+          }
+        } catch {
+          aiEnabled = (Deno.env.get('AI_INTAKE_ENABLED') ?? 'true').toLowerCase() !== 'false';
+        }
         if (aiEnabled) {
           elements.push(laml.redirect(`${baseUrl}/sw-ai-intake?customerId=${customerId}`));
         } else {
@@ -756,7 +945,19 @@ serve(async (req) => {
       return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
     }
     if (digits === '1') {
-      elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=account-update&field=name&customerId=${customerId}`));
+      // Per spec: "open an account or update info" should NOT be a robot
+      // capture flow — route the caller to a live rep with a note so the
+      // rep knows the intent the second they pick up.
+      try {
+        await supabase
+          .from('calls')
+          .update({ ai_intake_brief: 'Caller wants to open an account or update their account information (name, phone, email, mailing address).' })
+          .eq('call_sid', callSid);
+      } catch (err) {
+        console.error('[sw-inbound] account-menu note write failed:', err);
+      }
+      elements.push(laml.say("I'll connect you with one of our team members who can update your account info. Please hold."));
+      elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=connect-rep&customerId=${customerId}&category=account`));
     } else if (digits === '2') {
       elements.push(laml.redirect(`${baseUrl}/sw-payment-gather?customerId=${customerId}&mode=save`));
     } else {
@@ -848,46 +1049,63 @@ serve(async (req) => {
 
   if (step === 'voicemail-complete' && customerId) {
     // SignalWire posts RecordingUrl / RecordingSid / RecordingDuration here.
-    // Download the audio to Supabase Storage and create a `voicemails` row
-    // so admins can listen and read transcripts in the dashboard.
+    // Strategy: ALWAYS create the `voicemails` row first (so the admin UI
+    // shows the message even if the storage upload temporarily fails), then
+    // attempt to download & store the audio in a separate try block.
     const mailbox = url.searchParams.get('mailbox') || 'yiddish';
     const recordingUrl = (formData.get('RecordingUrl') as string) || '';
     const recordingSid = (formData.get('RecordingSid') as string) || '';
     const recordingDuration = parseInt((formData.get('RecordingDuration') as string) || '0', 10) || null;
 
-    if (recordingUrl && recordingSid) {
+    if (recordingSid) {
+      // Step 1: insert the voicemails row immediately so it shows up in
+      // the admin dashboard even before the audio finishes uploading.
+      let vmId: string | null = null;
       try {
-        // Lazy import to keep the hot path of other steps fast.
-        const { downloadRecording } = await import('../_shared/signalwire.ts');
-        const audioBuffer = await downloadRecording(recordingUrl + '.wav');
-        const storagePath = `voicemails/${mailbox}/${recordingSid}.wav`;
-        await supabase.storage
-          .from('call-recordings')
-          .upload(storagePath, audioBuffer, { contentType: 'audio/wav', upsert: true });
-
-        const { data: vm } = await supabase.from('voicemails').insert({
+        const { data: vm, error: vmErr } = await supabase.from('voicemails').insert({
           customer_id: customerId,
           caller_phone: from,
           mailbox,
           recording_sid: recordingSid,
-          recording_url: recordingUrl,
-          recording_storage_path: storagePath,
+          recording_url: recordingUrl || null,
+          recording_storage_path: null,
           duration_seconds: recordingDuration,
         }).select('id').single();
-
-        // Fire-and-forget transcription (Whisper).
-        const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-        const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-        if (vm?.id) {
-          fetch(`${supabaseUrl}/functions/v1/sw-transcription`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${serviceKey}` },
-            body: JSON.stringify({ voicemailId: vm.id, storagePath }),
-          }).catch(() => {});
-        }
+        if (vmErr) console.error('[voicemail] row insert error:', vmErr);
+        vmId = vm?.id ?? null;
       } catch (err) {
-        console.error('voicemail save error:', err);
+        console.error('[voicemail] row insert exception:', err);
       }
+
+      // Step 2: try to download & upload audio. On failure we just log —
+      // the row already exists and admins can use the SignalWire URL.
+      if (recordingUrl) {
+        try {
+          const { downloadRecording } = await import('../_shared/signalwire.ts');
+          const audioBuffer = await downloadRecording(recordingUrl + '.wav');
+          const storagePath = `voicemails/${mailbox}/${recordingSid}.wav`;
+          const { error: upErr } = await supabase.storage
+            .from('call-recordings')
+            .upload(storagePath, audioBuffer, { contentType: 'audio/wav', upsert: true });
+          if (upErr) {
+            console.error('[voicemail] storage upload error:', upErr);
+          } else if (vmId) {
+            await supabase.from('voicemails').update({ recording_storage_path: storagePath }).eq('id', vmId);
+            // Fire-and-forget transcription (Whisper).
+            const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+            const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+            fetch(`${supabaseUrl}/functions/v1/sw-transcription`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${serviceKey}` },
+              body: JSON.stringify({ voicemailId: vmId, storagePath }),
+            }).catch(() => {});
+          }
+        } catch (err) {
+          console.error('[voicemail] download/upload error:', err);
+        }
+      }
+    } else {
+      console.warn('[voicemail] missing RecordingSid in voicemail-complete payload');
     }
 
     const elements = [
@@ -1159,14 +1377,26 @@ serve(async (req) => {
         .select('id', { count: 'exact', head: true })
         .eq('customer_id', customer.id)
         .in('status', ['placed', 'paid', 'shipped']);
-      if ((openOrdersCount ?? 0) > 0) {
-        sayLines.push('To track an open order, press 5.');
-      }
+      const hasOpenOrders = (openOrdersCount ?? 0) > 0;
 
-      sayLines.push('Press 0 to speak with a representative right now, or stay on the line for more options.');
+      // Returning-caller shortcut menu (per 2026 spec):
+      //   0 = live agent     1 = tracking & recent orders
+      //   2 = buy minutes    3 = extension     * = full main menu
+      const shortcutLines: string[] = [];
+      shortcutLines.push('Press 0 to speak with a representative right away.');
+      if (hasOpenOrders) {
+        shortcutLines.push('Press 1 to track or hear about your recent orders.');
+      } else {
+        shortcutLines.push('Press 1 for tracking and recent orders.');
+      }
+      shortcutLines.push('Press 2 to buy more minutes.');
+      shortcutLines.push('Press 3 to dial a specific extension.');
+      shortcutLines.push('Or press star for the full menu.');
+      sayLines.push(...shortcutLines);
+
       elements.push(
         laml.gather(
-          { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=fast-rep&customerId=${customer.id}`, timeout: 6 },
+          { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=fast-rep&customerId=${customer.id}`, timeout: 7 },
           laml.sayLines(sayLines)
         )
       );
@@ -1175,21 +1405,23 @@ serve(async (req) => {
       elements.push(laml.say("No worries — let me connect you to a representative."));
       elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=connect-rep&customerId=${customer.id}`));
     } else {
-      // New caller — greet + full menu, all inside one <Gather>.
-      const menuLines = await promptLines('main_menu', [
-        'For a live agent, press 0.',
-        'For company information, press 1.',
-        'For minutes and packages, press 2.',
-        'To update your account info or save a card on file, press 3.',
-        'For tracking and recent orders, press 4.',
-        'For terms, conditions, and our security policy, press 7.',
-        'To leave a message for the Yiddish admin office, press 9.',
-      ]);
-      const sayLines = [...greetingLines, ...menuLines];
+      // New caller (unknown phone) — short greeting + dedicated 2-option
+      // intake gather: 1 = open account / talk to a rep, 2 = "I'm calling from
+      // a different phone number, my account is on a different number". Any
+      // other key (or timeout) drops to the full main menu so brand-new
+      // callers can still hear all the options.
+      const intakeLines = [
+        ...greetingLines,
+        'To open a new account or speak with a representative, press 1.',
+        'If you already have an account but are calling from a different phone number, press 2.',
+        'For all other options, press star to hear our main menu.',
+      ];
       elements.push(laml.gather(
-        { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=menu&customerId=${customer.id}`, timeout: 10 },
-        laml.sayLines(sayLines)
+        { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=new-caller-choice&customerId=${customer.id}`, timeout: 8 },
+        laml.sayLines(intakeLines)
       ));
+      // Timeout fallback — full main menu
+      elements.push(await buildMenuGather(baseUrl, customer));
       elements.push(laml.say("No worries — let me connect you to a representative."));
       elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=connect-rep&customerId=${customer.id}`));
     }
