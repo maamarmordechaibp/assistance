@@ -4,20 +4,44 @@ export function buildLamlResponse(elements: string[]): string {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n${elements.join('\n')}\n</Response>`;
 }
 
-// Default to a warm, expressive Amazon Polly Neural voice — much more
-// human-sounding than the legacy standard voices. SignalWire exposes these
-// via the same `Polly.<Name>-Neural` convention Twilio uses. Joanna-Neural
-// is consistently rated as one of the most natural and friendly female
-// voices, and tends to sound "a bit excited" without being robotic.
-export function say(text: string, voice = 'Polly.Matthew-Neural'): string {
-  return `  <Say voice="${voice}">${escapeXml(text)}</Say>`;
+// ── Voice configuration ───────────────────────────────────────────────────
+// We default to `Polly.Stephen-Neural` — Amazon's most conversational and
+// expressive American-male Neural voice. It sounds noticeably more "alive"
+// than Matthew (which is neutral/news-anchor). Customers regularly described
+// the previous voice as "robotic" / "too AI" — Stephen reads with natural
+// intonation, slight enthusiasm, and conversational pacing.
+//
+// Voice can be overridden per-call by passing the `voice` arg, and globally
+// at runtime by reading the `ivr_voice` row from `admin_settings` (see
+// `_shared/voiceConfig.ts`).
+//
+// Other tested male alternatives if Stephen ever sounds off in production:
+//   - Polly.Gregory-Neural (deeper, slower, more authoritative)
+//   - Polly.Matthew-Neural (neutral, professional)
+//   - Polly.Brian-Neural   (British)
+const DEFAULT_VOICE = 'Polly.Stephen-Neural';
+
+/** Wrap a plain string in SSML <speak><prosody> so the Neural voice reads
+ *  with a touch more energy and a warmer, conversational pace. Polly Neural
+ *  voices accept SSML when the <Say> body starts with `<speak>`. */
+function ssmlWrap(text: string): string {
+  // Safe defaults: keep rate at "medium", nudge pitch up ~2% for warmth,
+  // medium emphasis. Tweaking too aggressively makes Stephen sound cartoony.
+  return `<speak><prosody rate="medium" pitch="+2%">${text}</prosody></speak>`;
+}
+
+export function say(text: string, voice: string = DEFAULT_VOICE): string {
+  // SSML body — escape the user-supplied text but leave our own <speak>
+  // tags un-escaped (we control them).
+  const inner = ssmlWrap(escapeXml(text));
+  return `  <Say voice="${voice}">${inner}</Say>`;
 }
 
 /** Speak multiple lines as ONE continuous utterance so the Neural voice's
  *  prosody engine handles pacing naturally (no robotic pauses between
  *  sentences). Returns a single-element array so callers can spread into
  *  their elements list. */
-export function sayLines(lines: string[], voice = 'Polly.Matthew-Neural'): string[] {
+export function sayLines(lines: string[], voice: string = DEFAULT_VOICE): string[] {
   const joined = lines
     .map(l => l.trim())
     .filter(Boolean)

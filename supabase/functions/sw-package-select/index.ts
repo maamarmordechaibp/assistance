@@ -69,9 +69,12 @@ serve(async (req) => {
         const announcements: string[] = [];
         packages.forEach((pkg: { name: string; minutes: number; price: number; description?: string | null }, i: number) => {
           const num = i + 1;
-          const desc = (pkg.description || '').trim();
+          // NOTE: We intentionally DO NOT speak `pkg.description` here.
+          // Descriptions historically contained hard-coded prices that drift
+          // out of sync with `pkg.price`. The live `${pkg.minutes}` and
+          // `${pkg.price}` are always authoritative, so we read those only.
           const main = `Press ${num} for the ${pkg.name} package: ${pkg.minutes} minutes for ${pkg.price} dollars.`;
-          announcements.push(laml.say(desc ? `${main} ${desc}` : main));
+          announcements.push(laml.say(main));
           announcements.push(laml.pause(1));
         });
 

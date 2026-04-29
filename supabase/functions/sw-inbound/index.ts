@@ -589,11 +589,11 @@ serve(async (req) => {
         elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=account-menu&customerId=${customerId}`));
         break;
 
-      case '4': // Yiddish admin office voicemail
-        elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=voicemail-yiddish&customerId=${customerId}`));
+      case '4': // Tracking & recent orders submenu
+        elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=tracking-menu&customerId=${customerId}`));
         break;
 
-      case '5': // Order status (tracking)
+      case '5': // (legacy) Order status — kept as alias for callers used to old menu
         elements.push(laml.redirect(`${baseUrl}/sw-order-status?step=intro&customerId=${customerId}`));
         break;
 
@@ -601,7 +601,11 @@ serve(async (req) => {
         elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=terms-menu&customerId=${customerId}`));
         break;
 
-      case '9': // Replay main menu
+      case '9': // Yiddish admin office voicemail (moved here from 4 per 2026 spec)
+        elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=voicemail-yiddish&customerId=${customerId}`));
+        break;
+
+      case '*': // Replay main menu
         elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
         break;
 
@@ -708,25 +712,27 @@ serve(async (req) => {
       elements.push(laml.pause(1));
       elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
     } else if (digits === '2') {
-      elements.push(laml.redirect(`${baseUrl}/sw-package-select?customerId=${customerId}`));
-    } else if (digits === '3') {
-      // Auto-refill using the most recent package the customer purchased.
-      const { data: lastPayment } = await supabase
-        .from('payments')
-        .select('package_id, payment_packages(id, name, minutes, price, is_active)')
-        .eq('customer_id', customerId)
-        .eq('status', 'completed')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      const pkg = (lastPayment as { payment_packages?: { id: string; name: string; minutes: number; price: number; is_active: boolean } } | null)?.payment_packages;
-      if (pkg && pkg.is_active) {
-        elements.push(laml.say(`Great — refilling your last package: ${pkg.name}, ${pkg.minutes} minutes for ${pkg.price} dollars.`));
-        elements.push(laml.redirect(`${baseUrl}/sw-package-select?customerId=${customerId}&autoSelect=${pkg.id}`));
+      // "Hear our price packages" — read prices only, then return to main menu.
+      const { data: packages } = await supabase
+        .from('payment_packages')
+        .select('name, minutes, price')
+        .eq('is_active', true)
+        .order('sort_order');
+      if (!packages || packages.length === 0) {
+        elements.push(laml.say('No packages are currently available.'));
       } else {
-        elements.push(laml.say("I don't see a previous package to refill yet — let me read you our options."));
-        elements.push(laml.redirect(`${baseUrl}/sw-package-select?customerId=${customerId}`));
+        const lines: string[] = ['Here are our current minute packages:'];
+        for (const pkg of packages) {
+          lines.push(`The ${pkg.name} package: ${pkg.minutes} minutes for ${pkg.price} dollars.`);
+        }
+        lines.push('To buy a package, press 3 from the previous menu, or press star to return now.');
+        elements.push(laml.sayLines(lines).join('\n'));
       }
+      elements.push(laml.pause(1));
+      elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
+    } else if (digits === '3') {
+      // "Buy a minutes package" — open the buy flow (lists packages, accepts a pick, takes a card).
+      elements.push(laml.redirect(`${baseUrl}/sw-package-select?customerId=${customerId}`));
     } else {
       elements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
     }
@@ -892,6 +898,36 @@ serve(async (req) => {
       laml.hangup(),
     ];
     return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
+  }
+
+  // ── 4) Tracking & recent orders submenu ──
+  //    1: tracking info (auto) — defers to sw-order-status which already
+  //       reads tracking number / ETA / can SMS the tracking number.
+  //    2: hear recent orders & forms — same intro page (lists orders).
+  //    *: back to main menu.
+  if (step === 'tracking-menu' && customerId) {
+    const trackElements: string[] = [];
+    if (!digits) {
+      const menuLines = await promptLines('tracking_menu', [
+        'To hear tracking information of your recent order with our automatic system, press 1.',
+        'To hear your recent orders and forms, press 2.',
+        'To return to the main menu, press star.',
+      ]);
+      trackElements.push(laml.gather(
+        { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=tracking-menu&customerId=${customerId}`, timeout: 10 },
+        laml.sayLines(menuLines),
+      ));
+      trackElements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
+      return new Response(laml.buildLamlResponse(trackElements), { headers: { 'Content-Type': 'application/xml' } });
+    }
+    if (digits === '1' || digits === '2') {
+      // Both options drop into sw-order-status?step=intro which lists open
+      // orders, then per-order plays status + tracking + ETA + SMS option.
+      trackElements.push(laml.redirect(`${baseUrl}/sw-order-status?step=intro&customerId=${customerId}`));
+    } else {
+      trackElements.push(laml.redirect(`${baseUrl}/sw-inbound?step=replay&customerId=${customerId}`));
+    }
+    return new Response(laml.buildLamlResponse(trackElements), { headers: { 'Content-Type': 'application/xml' } });
   }
 
   // ── 7) Terms & Security submenu ──
@@ -1145,8 +1181,9 @@ serve(async (req) => {
         'For company information, press 1.',
         'For minutes and packages, press 2.',
         'To update your account info or save a card on file, press 3.',
-        'To leave a message for the Yiddish admin office, press 4.',
+        'For tracking and recent orders, press 4.',
         'For terms, conditions, and our security policy, press 7.',
+        'To leave a message for the Yiddish admin office, press 9.',
       ]);
       const sayLines = [...greetingLines, ...menuLines];
       elements.push(laml.gather(
@@ -1179,8 +1216,9 @@ async function buildMenuGather(baseUrl: string, customer: { id: string; preferre
     'For company information, press 1.',
     'For minutes and packages, press 2.',
     'To update your account info or save a card on file, press 3.',
-    'To leave a message for the Yiddish admin office, press 4.',
+    'For tracking and recent orders, press 4.',
     'For terms, conditions, and our security policy, press 7.',
+    'To leave a message for the Yiddish admin office, press 9.',
   ]);
   return laml.gather(
     { input: 'dtmf', numDigits: 1, action: `${baseUrl}/sw-inbound?step=menu&customerId=${customer.id}`, timeout: 10 },
