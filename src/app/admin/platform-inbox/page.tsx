@@ -604,7 +604,32 @@ export default function PlatformInboxPage() {
                       </pre>
                     );
                   }
-                  return <p className="text-muted-foreground italic">No body content.</p>;
+                  return (
+                    <div className="space-y-3">
+                      <p className="text-muted-foreground italic">No body content.</p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={async () => {
+                          try {
+                            const res = await edgeFn('platform-email-refetch-body', { id: selected.id });
+                            const j = await res.json();
+                            if (j?.results?.[0]?.ok) {
+                              toast.success('Body fetched');
+                              load();
+                            } else {
+                              toast.error('Could not fetch: ' + (j?.results?.[0]?.reason || j?.error || 'unknown'));
+                            }
+                          } catch (err) {
+                            toast.error('Refetch failed: ' + String(err));
+                          }
+                        }}
+                      >
+                        <RefreshCw className="size-3.5 mr-1.5" />
+                        Fetch from provider
+                      </Button>
+                    </div>
+                  );
                 })()}
               </div>
 

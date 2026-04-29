@@ -324,6 +324,36 @@ serve(async (req) => {
         getStr(['email', 'html']) || getStr(['payload', 'html']) ||
         getStr(['stripped_html']) || getStr(['body-html']);
     }
+
+    // Resend `email.received` webhooks deliver only metadata — body must
+    // be fetched separately from the Resend API using the email_id. This
+    // is documented behavior, not a bug. We do that here so the row hits
+    // the database WITH the body and admins don't see "No body content".
+    if (normalized.provider === 'resend' && !normalized.text_body && !normalized.html_body) {
+      const resendKey = Deno.env.get('RESEND_API_KEY');
+      const emailId =
+        getStr(['data', 'email_id']) || getStr(['data', 'id']) ||
+        normalized.provider_event_id;
+      if (resendKey && emailId) {
+        try {
+          const r = await fetch(`https://api.resend.com/emails/${emailId}`, {
+            headers: { Authorization: `Bearer ${resendKey}` },
+          });
+          if (r.ok) {
+            const j = await r.json() as Record<string, unknown>;
+            const t = typeof j.text === 'string' ? j.text : null;
+            const h = typeof j.html === 'string' ? j.html : null;
+            if (t) normalized.text_body = t;
+            if (h) normalized.html_body = h;
+            console.log(`[email-inbound] resend body fetch: text=${!!t} html=${!!h} id=${emailId}`);
+          } else {
+            console.warn(`[email-inbound] resend body fetch ${r.status}: ${await r.text()}`);
+          }
+        } catch (err) {
+          console.error('[email-inbound] resend body fetch error:', err);
+        }
+      }
+    }
   }
 
   if (!normalized || !normalized.mailbox) {
