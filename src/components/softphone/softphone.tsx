@@ -381,10 +381,10 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
         }
         const { data, error } = await supabase
           .from('call_queue')
-          .select('id, queue_name, from_number, caller_name, target_rep_id, status, enqueued_at')
+          .select('id, queue_name, from_number, caller_name, target_rep_id, status, enqueued_at, priority_at')
           .eq('status', 'waiting')
           .or(`target_rep_id.eq.${repId},target_rep_id.is.null`)
-          .order('enqueued_at', { ascending: true })
+          .order('priority_at', { ascending: true })
           .limit(1);
         if (error) {
           addLog(`queue poll error: ${error.message.slice(0, 80)}`);

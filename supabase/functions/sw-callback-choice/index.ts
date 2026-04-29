@@ -39,6 +39,20 @@ serve(async (req) => {
       customer = secMatch ?? null;
     }
 
+    // Look up the caller's current call_queue row so we can preserve the
+    // place they earned by waiting. If the same caller phones back later
+    // (or we dial them and they re-enter the queue) we re-enqueue them at
+    // this original timestamp instead of pushing them to the back.
+    let originalEnqueuedAt: string | null = null;
+    if (callSid) {
+      const { data: q } = await supabase
+        .from('call_queue')
+        .select('enqueued_at')
+        .eq('call_sid', callSid)
+        .maybeSingle();
+      originalEnqueuedAt = q?.enqueued_at ?? null;
+    }
+
     // Upsert by call_sid so a duplicate webhook can't create two rows, and
     // so an explicit DTMF-1 request takes precedence over any auto-callback
     // that queue-exit might insert later for the same call.
@@ -50,6 +64,7 @@ serve(async (req) => {
         call_sid: callSid,
         is_general: true,
         status: 'pending',
+        original_enqueued_at: originalEnqueuedAt,
       },
       { onConflict: 'call_sid', ignoreDuplicates: false },
     );
@@ -57,8 +72,13 @@ serve(async (req) => {
     elements.push(laml.say('Thank you. We have saved your callback request. A representative will call you back as soon as possible. Goodbye.'));
     elements.push(laml.hangup());
   } else {
-    elements.push(laml.say('Thank you for continuing to hold. A representative will be with you shortly.'));
-    elements.push(laml.redirect(`${baseUrl}/sw-queue-wait`));
+    // Caller pressed any non-1 digit (2 to keep holding, or anything else
+    // like 9 from a misdial). Returning a <Redirect> here would EXIT the
+    // <Enqueue> context entirely and disconnect the call — SignalWire only
+    // re-issues waitUrl while the caller is still inside the queue. We send
+    // an empty <Response> so SignalWire just resumes the regular wait loop
+    // and the caller hears music until the next position announcement.
+    // Returning XML with no children is intentional.
   }
 
   const xml = laml.buildLamlResponse(elements);
