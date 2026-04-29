@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { edgeFn } from '@/lib/supabase/edge';
 import { formatDateTime } from '@/lib/utils';
 import { toast } from 'sonner';
 import {
@@ -14,6 +15,8 @@ import {
   ExternalLink,
   X,
   Reply,
+  Send,
+  PenSquare,
   Loader2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -29,6 +32,12 @@ const MAILBOXES = [
 ] as const;
 
 type MailboxKey = (typeof MAILBOXES)[number]['key'];
+
+const SEND_MAILBOXES = MAILBOXES.filter((m) => m.key !== 'all') as ReadonlyArray<{
+  key: Exclude<MailboxKey, 'all'>;
+  label: string;
+  color: string;
+}>;
 
 interface PlatformEmail {
   id: string;
@@ -74,6 +83,150 @@ function extractLinks(text: string | null | undefined): string[] {
   return Array.from(new Set(text.match(URL_REGEX) || []));
 }
 
+interface ComposeModalProps {
+  defaultFrom?: Exclude<MailboxKey, 'all'>;
+  defaultTo?: string;
+  defaultSubject?: string;
+  defaultBody?: string;
+  inReplyTo?: string | null;
+  onClose: () => void;
+  onSent: () => void;
+}
+
+function ComposeModal({
+  defaultFrom,
+  defaultTo,
+  defaultSubject,
+  defaultBody,
+  inReplyTo,
+  onClose,
+  onSent,
+}: ComposeModalProps) {
+  const [from, setFrom] = useState<Exclude<MailboxKey, 'all'>>(
+    defaultFrom || SEND_MAILBOXES[0].key,
+  );
+  const [to, setTo] = useState(defaultTo || '');
+  const [cc, setCc] = useState('');
+  const [subject, setSubject] = useState(defaultSubject || '');
+  const [body, setBody] = useState(defaultBody || '');
+  const [sending, setSending] = useState(false);
+
+  const send = async () => {
+    if (!to.trim() || !subject.trim() || !body.trim()) {
+      toast.error('To, subject, and body are required');
+      return;
+    }
+    setSending(true);
+    try {
+      const res = await edgeFn('platform-email-send', {
+        method: 'POST',
+        body: JSON.stringify({
+          from_mailbox: from,
+          to: to.split(',').map((s) => s.trim()).filter(Boolean),
+          cc: cc.split(',').map((s) => s.trim()).filter(Boolean),
+          subject,
+          text: body,
+          in_reply_to: inReplyTo || undefined,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(json?.error || `Send failed (${res.status})`);
+        return;
+      }
+      toast.success('Email sent');
+      onSent();
+      onClose();
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-2xl rounded-xl border border-border bg-background shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+          <div className="flex items-center gap-2">
+            <Send className="size-4 text-accent" />
+            <div className="text-sm font-semibold">
+              {inReplyTo ? 'Reply' : 'New email'}
+            </div>
+          </div>
+          <Button variant="ghost" size="icon-sm" onClick={onClose}>
+            <X />
+          </Button>
+        </div>
+        <div className="space-y-3 p-4">
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">From</label>
+            <select
+              value={from}
+              onChange={(e) => setFrom(e.target.value as Exclude<MailboxKey, 'all'>)}
+              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+            >
+              {SEND_MAILBOXES.map((m) => (
+                <option key={m.key} value={m.key}>
+                  {m.label} &lt;{m.key}&gt;
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">To</label>
+            <Input
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+              placeholder="recipient@example.com (comma-separate multiple)"
+              autoFocus
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">CC (optional)</label>
+            <Input
+              value={cc}
+              onChange={(e) => setCc(e.target.value)}
+              placeholder="someone@example.com"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Subject</label>
+            <Input
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+              placeholder="Subject"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Message</label>
+            <textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              placeholder="Write your message…"
+              className="mt-1 w-full min-h-48 rounded-md border border-border bg-background px-3 py-2 text-sm font-sans"
+              rows={10}
+            />
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
+          <Button variant="ghost" onClick={onClose} disabled={sending}>
+            Cancel
+          </Button>
+          <Button onClick={send} disabled={sending}>
+            {sending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+            Send
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function PlatformInboxPage() {
   const supabase = useMemo(() => createClient(), []);
   const [emails, setEmails] = useState<PlatformEmail[]>([]);
@@ -81,6 +234,14 @@ export default function PlatformInboxPage() {
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState<MailboxKey>('all');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [composeOpen, setComposeOpen] = useState(false);
+  const [composeDefaults, setComposeDefaults] = useState<{
+    from?: Exclude<MailboxKey, 'all'>;
+    to?: string;
+    subject?: string;
+    body?: string;
+    inReplyTo?: string | null;
+  }>({});
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   const load = useCallback(async () => {
@@ -163,11 +324,24 @@ export default function PlatformInboxPage() {
             Internal platform mailboxes — admin only.
           </p>
         </div>
+        <div className="flex items-center gap-2">
         <Button variant="outline" size="sm" onClick={load} disabled={loading}>
           <RefreshCw className={cn('size-4', loading && 'animate-spin')} />
           Refresh
         </Button>
+        <Button
+          size="sm"
+          onClick={() => {
+            const presetFrom = (tab !== 'all' ? tab : SEND_MAILBOXES[0].key) as Exclude<MailboxKey, 'all'>;
+            setComposeDefaults({ from: presetFrom });
+            setComposeOpen(true);
+          }}
+        >
+          <PenSquare className="size-4" />
+          Compose
+        </Button>
       </div>
+    </div>
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-border pb-2">
@@ -300,11 +474,23 @@ export default function PlatformInboxPage() {
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      title="Reply (opens mail client)"
+                      title="Reply"
                       onClick={() => {
                         const addr = selected.reply_to || selected.from_address || '';
                         const subj = selected.subject ? `Re: ${selected.subject}` : '';
-                        window.open(`mailto:${addr}?subject=${encodeURIComponent(subj)}`);
+                        const quoted = selected.text_body
+                          ? '\n\n---\nOn ' + formatDateTime(selected.received_at) +
+                            ', ' + (selected.from_address || 'sender') + ' wrote:\n' +
+                            selected.text_body.split('\n').map((l) => '> ' + l).join('\n')
+                          : '';
+                        setComposeDefaults({
+                          from: selected.mailbox as Exclude<MailboxKey, 'all'>,
+                          to: addr,
+                          subject: subj,
+                          body: quoted,
+                          inReplyTo: selected.message_id,
+                        });
+                        setComposeOpen(true);
                       }}
                     >
                       <Reply className="size-4" />
@@ -372,6 +558,18 @@ export default function PlatformInboxPage() {
           )}
         </div>
       </div>
+
+      {composeOpen && (
+        <ComposeModal
+          defaultFrom={composeDefaults.from}
+          defaultTo={composeDefaults.to}
+          defaultSubject={composeDefaults.subject}
+          defaultBody={composeDefaults.body}
+          inReplyTo={composeDefaults.inReplyTo}
+          onClose={() => setComposeOpen(false)}
+          onSent={() => load()}
+        />
+      )}
     </div>
   );
 }
