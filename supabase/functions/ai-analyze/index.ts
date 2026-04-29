@@ -24,6 +24,9 @@ Analyze the provided call transcript and return a JSON object with these fields:
 - item_platform: If item_found is true, the platform or store where it was found (e.g. "Amazon", "Best Buy", "SSA.gov"). Otherwise null.
 - item_notes: If item_found is true, any useful notes about the item (availability, delivery, tips). Otherwise null.
 - item_search_terms: If item_found is true, 2-4 specific search keywords that would find this item again. Otherwise an empty array [].
+- behavior_flags: An array of behavior issues detected on the REP side. Empty array [] if none. Each entry: {"category": one of "inappropriate_language"|"raised_voice"|"religious_or_political"|"discriminatory"|"harassment"|"threats_or_violence"|"unprofessional"|"other", "severity": "info"|"warning"|"critical", "excerpt": short verbatim quote from transcript that triggered this, "reason": one-sentence explanation}.
+  • Use "critical" ONLY for clearly egregious behavior the admin must be paged for (slurs, threats, screaming, harassment, sustained inappropriate religious/political proselytizing).
+  • If transcript_source is intake_brief_only, behavior_flags MUST be [].
 
 Be objective and fair. Flag wasted time only when there is clear evidence of unnecessary delays, excessive small talk unrelated to the task, or the rep clearly stalling.`;
 
@@ -164,6 +167,62 @@ serve(async (req) => {
         search_terms: result.item_search_terms || [],
         source: 'ai_auto',
       }).then(() => {}).catch((e: unknown) => console.error('[ai-analyze] findings insert error:', e));
+    }
+
+    // ── Behavior moderation ──
+    // Insert each detected flag and, if any are 'critical', queue an
+    // admin in-app alert AND an admin phone-call alert.
+    const behaviorFlags: Array<{ category: string; severity: string; excerpt?: string; reason?: string }> =
+      Array.isArray(result.behavior_flags) ? result.behavior_flags : [];
+    if (hasRealAudio && behaviorFlags.length > 0) {
+      const validCategories = new Set([
+        'inappropriate_language','raised_voice','religious_or_political',
+        'discriminatory','harassment','threats_or_violence','unprofessional','other',
+      ]);
+      const validSeverities = new Set(['info','warning','critical']);
+      const rows = behaviorFlags
+        .filter((f) => f && validCategories.has(f.category) && validSeverities.has(f.severity))
+        .map((f) => ({
+          call_id: callId,
+          rep_id: call.rep_id || null,
+          customer_id: call.customer_id || null,
+          category: f.category,
+          severity: f.severity,
+          excerpt: f.excerpt ? String(f.excerpt).slice(0, 500) : null,
+          reason: f.reason ? String(f.reason).slice(0, 500) : null,
+        }));
+      if (rows.length > 0) {
+        await supabase.from('call_behavior_flags').insert(rows)
+          .then(() => {})
+          .catch((e: unknown) => console.error('[ai-analyze] behavior insert error:', e));
+
+        const critical = rows.filter((r) => r.severity === 'critical');
+        if (critical.length > 0) {
+          // In-app alert for the admin bell.
+          const { data: alert } = await supabase.from('admin_alerts').insert({
+            kind: 'behavior_critical',
+            severity: 'critical',
+            payload: {
+              type: 'behavior_critical',
+              call_id: callId,
+              rep_id: call.rep_id,
+              flags: critical,
+            },
+          }).select('id').single();
+          // Phone alert: enqueue (admin-phone-dial cron will pick up).
+          await supabase.from('admin_phone_alerts').insert({
+            reason: 'behavior_critical',
+            payload: {
+              call_id: callId,
+              rep_id: call.rep_id,
+              categories: critical.map((c) => c.category),
+            },
+            call_id: callId,
+            rep_id: call.rep_id || null,
+          });
+          console.log(`[ai-analyze] queued critical behavior alert for call ${callId}`, alert?.id);
+        }
+      }
     }
 
     // ── Update customer preference profile ──

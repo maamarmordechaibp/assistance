@@ -35,6 +35,7 @@ import {
   FileText,
   Mail,
   Download,
+  FileDown,
   Search,
   ShoppingBag,
   Maximize2,
@@ -788,6 +789,31 @@ export default function RepDashboard() {
     setRbFullscreen(false);
   };
 
+  const printRbPdf = async () => {
+    if (!rbActiveTabId) {
+      toast.error('No active tab to print.');
+      return;
+    }
+    try {
+      toast('Generating PDF…', { duration: 8000 });
+      const res = await edgeFn('rep-browser', { method: 'POST', body: JSON.stringify({ action: 'print-pdf', targetId: rbActiveTabId }) });
+      const data = await res.json();
+      if (!res.ok || !data.pdf) throw new Error(data.error || data.detail || 'PDF generation failed');
+      const bytes = Uint8Array.from(atob(data.pdf), c => c.charCodeAt(0));
+      const blob = new Blob([bytes], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const activeTab = rbTabs.find(t => t.id === rbActiveTabId);
+      const hostname = activeTab?.url ? (() => { try { return new URL(activeTab.url).hostname; } catch { return 'page'; } })() : 'page';
+      a.download = `${hostname}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      toast.error('PDF failed: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  };
+
   // Poll tab list for the rep browser while open
   useEffect(() => {
     if (!rbLiveUrl) return;
@@ -1537,6 +1563,14 @@ export default function RepDashboard() {
                       title="Open in a real browser window (much bigger)"
                     >
                       <ExternalLink className="w-3 h-3" /> Pop out
+                    </button>
+                    <button
+                      onClick={printRbPdf}
+                      disabled={!rbActiveTabId}
+                      className="text-xs px-2 py-1 rounded border hover:bg-muted/50 flex items-center gap-1 disabled:opacity-40"
+                      title="Save current page as PDF"
+                    >
+                      <FileDown className="w-3 h-3" /> PDF
                     </button>
                     <button onClick={() => setRbFullscreen(v => !v)} className="text-xs px-2 py-1 rounded border hover:bg-muted/50 flex items-center gap-1">
                       {rbFullscreen ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}

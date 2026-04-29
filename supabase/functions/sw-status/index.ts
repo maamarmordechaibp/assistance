@@ -46,6 +46,28 @@ serve(async (req) => {
 
   await supabase.from('calls').update(updateData).eq('id', call.id);
 
+  // Flip the connected rep into 'wrap_up' so the post-call questionnaire
+  // modal opens and the queue stops routing to them. The rep-monitor cron
+  // auto-clears wrap_up after wrap_up_grace_seconds if not submitted.
+  if (call.rep_id) {
+    const { data: prevRep } = await supabase
+      .from('reps')
+      .select('status')
+      .eq('id', call.rep_id)
+      .maybeSingle();
+
+    if (prevRep && prevRep.status !== 'offline') {
+      await supabase.from('reps').update({ status: 'wrap_up' }).eq('id', call.rep_id);
+      await supabase.from('rep_status_events').insert({
+        rep_id: call.rep_id,
+        from_status: prevRep.status,
+        to_status: 'wrap_up',
+        reason: 'call_ended',
+        call_id: call.id,
+      });
+    }
+  }
+
   // Deduct minutes from customer balance
   if (call.customer_id && billableMinutes > 0) {
     await supabase.from('minute_ledger').insert({

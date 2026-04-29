@@ -122,6 +122,28 @@ serve(async (req) => {
     }
   }
 
+  // Auto-busy: flip rep status to 'on_call' for the duration of the call.
+  // sw-status flips it back to 'wrap_up' when the call completes.
+  try {
+    const { data: prevRep } = await service
+      .from('reps')
+      .select('status')
+      .eq('id', user.id)
+      .maybeSingle();
+    if (prevRep && prevRep.status !== 'on_call') {
+      await service.from('reps').update({ status: 'on_call' }).eq('id', user.id);
+      await service.from('rep_status_events').insert({
+        rep_id: user.id,
+        from_status: prevRep.status,
+        to_status: 'on_call',
+        reason: 'call_claimed',
+        call_id: (callRow?.id as string | undefined) ?? null,
+      });
+    }
+  } catch (err) {
+    console.error('[call-claim] status flip failed:', err);
+  }
+
   if (data.customer_id) {
     const { data: cust } = await service
       .from('customers')

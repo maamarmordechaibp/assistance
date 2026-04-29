@@ -154,6 +154,27 @@ serve(async (req) => {
       });
     }
 
+    // Auto-busy: flip rep to 'on_call' for the duration of the outbound call.
+    try {
+      const { data: prevRep } = await supabase
+        .from('reps')
+        .select('status')
+        .eq('id', rep.id)
+        .maybeSingle();
+      if (prevRep && prevRep.status !== 'on_call') {
+        await supabase.from('reps').update({ status: 'on_call' }).eq('id', rep.id);
+        await supabase.from('rep_status_events').insert({
+          rep_id: rep.id,
+          from_status: prevRep.status,
+          to_status: 'on_call',
+          reason: 'call_claimed',
+          call_id: inserted.id,
+        });
+      }
+    } catch (err) {
+      console.error('[call-outbound] outbound status flip failed:', err);
+    }
+
     return new Response(JSON.stringify({
       call_id: inserted.id,
       customer_id: customerId,
@@ -233,6 +254,29 @@ serve(async (req) => {
             total_minutes_used: Number(customer.total_minutes_used || 0) + minutes,
           })
           .eq('id', call.customer_id);
+      }
+    }
+
+    // Flip rep into wrap_up so the post-call questionnaire opens.
+    if (call?.rep_id) {
+      try {
+        const { data: prevRep } = await supabase
+          .from('reps')
+          .select('status')
+          .eq('id', call.rep_id)
+          .maybeSingle();
+        if (prevRep && prevRep.status !== 'offline') {
+          await supabase.from('reps').update({ status: 'wrap_up' }).eq('id', call.rep_id);
+          await supabase.from('rep_status_events').insert({
+            rep_id: call.rep_id,
+            from_status: prevRep.status,
+            to_status: 'wrap_up',
+            reason: 'call_ended',
+            call_id: call.id,
+          });
+        }
+      } catch (err) {
+        console.error('[call-outbound] wrap_up flip failed:', err);
       }
     }
 

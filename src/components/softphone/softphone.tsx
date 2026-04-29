@@ -327,6 +327,35 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
     if (!repId) return;
     const supabase = createClient();
 
+    // Track our own rep status so we don't ring while in 'wrap_up'/'offline'.
+    // Status flips happen server-side (call-claim -> on_call, sw-status ->
+    // wrap_up). When status returns to 'available' the rep can ring again.
+    let repAvailable = true;
+    (async () => {
+      const { data } = await supabase.from('reps').select('status').eq('id', repId).maybeSingle();
+      if (data) repAvailable = data.status === 'available';
+    })();
+    const statusChannel = supabase
+      .channel(`rep-self-status-${repId}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'reps', filter: `id=eq.${repId}` },
+        (payload) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const newStatus = (payload.new as any)?.status as string | undefined;
+          repAvailable = newStatus === 'available';
+          // If we transitioned away from available while a ring is showing,
+          // clear the UI so the rep can't accept it.
+          if (!repAvailable && pendingRingRef.current) {
+            pendingRingRef.current = null;
+            setCallerNumber('');
+            setCallState('idle');
+            addLog(`Cleared ring (status now ${newStatus})`);
+          }
+        },
+      )
+      .subscribe();
+
     // Stale-ring guard: any row enqueued more than 90s ago is treated as
     // dead. The customer would have hung up or been routed to voicemail
     // long before then, so we never ring on stale rows AND we mark them
@@ -336,6 +365,8 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
     const tryPickupRow = (row: any, source: string) => {
       if (!row || row.status !== 'waiting') return;
       if (row.target_rep_id && row.target_rep_id !== repId) return;
+      // Don't ring while in wrap_up / on_call / offline.
+      if (!repAvailable) return;
       const ageMs = row.enqueued_at ? Date.now() - new Date(row.enqueued_at).getTime() : 0;
       if (ageMs > STALE_MS) {
         addLog(`Skipping stale ring (${Math.round(ageMs / 1000)}s old, id=${row.id})`);
@@ -433,6 +464,7 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
     return () => {
       clearInterval(pollInterval);
       supabase.removeChannel(channel).catch(() => {});
+      supabase.removeChannel(statusChannel).catch(() => {});
     };
   }, [repId, addLog]);
 

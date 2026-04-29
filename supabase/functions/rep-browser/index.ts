@@ -47,6 +47,67 @@ async function cdpBrowserCall(connectUrl: string, method: string, params: Record
   }
 }
 
+// Call a page-level CDP method using the flat-session protocol.
+// 1. Connects to the browser-level WebSocket.
+// 2. Attaches to the given target (page) to obtain a sessionId.
+// 3. Sends the page command via that session and returns the result.
+async function cdpPageCall(
+  connectUrl: string,
+  targetId: string,
+  method: string,
+  params: Record<string, unknown> = {},
+  timeoutMs = 45000,
+): Promise<unknown> {
+  const ws = new WebSocket(connectUrl);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('CDP connect timeout')), 12000);
+      ws.onopen = () => { clearTimeout(t); resolve(); };
+      ws.onerror = () => { clearTimeout(t); reject(new Error('CDP ws error')); };
+    });
+
+    // Step 1: attach to target with flatten:true to get a sessionId
+    const attachId = Math.floor(Math.random() * 1_000_000_000);
+    const sessionId = await new Promise<string>((resolve, reject) => {
+      const to = setTimeout(() => reject(new Error('Target.attachToTarget timeout')), 12000);
+      const listener = (e: MessageEvent) => {
+        let msg: { id?: number; result?: { sessionId?: string }; error?: { message?: string } };
+        try { msg = JSON.parse(e.data); } catch { return; }
+        if (msg.id === attachId) {
+          clearTimeout(to);
+          ws.removeEventListener('message', listener);
+          if (msg.error) reject(new Error(msg.error.message || 'attachToTarget failed'));
+          else resolve(msg.result?.sessionId || '');
+        }
+      };
+      ws.addEventListener('message', listener);
+      ws.send(JSON.stringify({ id: attachId, method: 'Target.attachToTarget', params: { targetId, flatten: true } }));
+    });
+
+    // Step 2: send page-level command via sessionId
+    const cmdId = Math.floor(Math.random() * 1_000_000_000);
+    const result = await new Promise<unknown>((resolve, reject) => {
+      const to = setTimeout(() => reject(new Error(`${method} timeout`)), timeoutMs);
+      const listener = (e: MessageEvent) => {
+        let msg: { id?: number; sessionId?: string; result?: unknown; error?: { message?: string } };
+        try { msg = JSON.parse(e.data); } catch { return; }
+        if (msg.id === cmdId && msg.sessionId === sessionId) {
+          clearTimeout(to);
+          ws.removeEventListener('message', listener);
+          if (msg.error) reject(new Error(msg.error.message || method));
+          else resolve(msg.result);
+        }
+      };
+      ws.addEventListener('message', listener);
+      ws.send(JSON.stringify({ id: cmdId, method, params, sessionId }));
+    });
+
+    return result;
+  } finally {
+    try { ws.close(); } catch { /* ignore */ }
+  }
+}
+
 async function getOrCreateRepContext(svc: ReturnType<typeof createServiceClient>, repId: string): Promise<string> {
   const projectId = Deno.env.get('BROWSERBASE_PROJECT_ID')!;
   const { data: existing } = await svc.from('rep_browser_contexts')
@@ -126,6 +187,29 @@ serve(async (req) => {
           }
         } catch (err) {
           return json({ error: 'cdp call failed', detail: String((err as Error).message) }, 502);
+        }
+      }
+
+      if (action === 'print-pdf') {
+        const targetId: string = body.targetId;
+        if (!targetId) return json({ error: 'targetId required' }, 400);
+        const { data: active } = await svc.from('rep_browser_sessions')
+          .select('connect_url').eq('rep_id', user.id).eq('status', 'active')
+          .order('started_at', { ascending: false }).limit(1).maybeSingle();
+        if (!active?.connect_url) return json({ error: 'no active session' }, 400);
+        try {
+          const result = await cdpPageCall(active.connect_url, targetId, 'Page.printToPDF', {
+            printBackground: true,
+            paperWidth: 8.5,
+            paperHeight: 11,
+            marginTop: 0.4,
+            marginBottom: 0.4,
+            marginLeft: 0.4,
+            marginRight: 0.4,
+          });
+          return json({ pdf: (result as { data?: string }).data });
+        } catch (err) {
+          return json({ error: 'pdf failed', detail: String((err as Error).message) }, 502);
         }
       }
 
