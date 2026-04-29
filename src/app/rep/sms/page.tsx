@@ -50,7 +50,12 @@ export default function RepSmsPage() {
         body: JSON.stringify({ to: composeTo.trim(), message: composeMsg.trim(), mediaUrl: composeMedia.trim() || undefined }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || data.detail || 'Send failed');
+      if (!res.ok) {
+        const detail = typeof data.detail === 'string' ? data.detail : '';
+        const m = detail.match(/<Message>([^<]+)<\/Message>/) || detail.match(/"message"\s*:\s*"([^"]+)"/);
+        const msg = m ? m[1] : (data.error || 'Send failed');
+        throw new Error(detail ? `${msg} — ${detail.slice(0, 300)}` : msg);
+      }
       setComposeMsg('');
       setComposeMedia('');
       setSendSuccess(`Sent to ${data.to}`);

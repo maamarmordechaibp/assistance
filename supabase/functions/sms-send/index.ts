@@ -27,12 +27,11 @@ serve(async (req) => {
   const user = await getUser(req);
   if (!user) return json({ error: 'unauthorized' }, 401);
 
-  const userClient = createUserClient(req);
-  const { data: rep } = await userClient.from('reps').select('id').eq('id', user.id).maybeSingle();
-  if (!rep) {
-    // Also allow admins
-    const { data: admin } = await userClient.from('admins').select('id').eq('id', user.id).maybeSingle();
-    if (!admin) return json({ error: 'reps and admins only' }, 403);
+  const isAdmin = user.app_metadata?.role === 'admin';
+  if (!isAdmin) {
+    const userClient = createUserClient(req);
+    const { data: rep } = await userClient.from('reps').select('id').eq('id', user.id).maybeSingle();
+    if (!rep) return json({ error: 'reps and admins only' }, 403);
   }
 
   const body = await req.json().catch(() => null);
