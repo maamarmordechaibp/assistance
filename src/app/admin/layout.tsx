@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import Sidebar from '@/components/layout/sidebar';
 import { Topbar } from '@/components/layout/topbar';
+import AlertsBell from '@/components/admin/AlertsBell';
 
 export default async function AdminLayout({
   children,
@@ -24,7 +25,7 @@ export default async function AdminLayout({
     <div className="flex min-h-screen bg-background">
       <Sidebar role="admin" userName={userName} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <Topbar role="admin" />
+        <Topbar role="admin" trailing={<AlertsBell />} />
         <main className="flex-1 overflow-auto">
           <div className="mx-auto w-full max-w-7xl p-4 sm:p-6 lg:p-8">{children}</div>
         </main>

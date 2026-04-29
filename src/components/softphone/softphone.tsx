@@ -367,6 +367,13 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
       if (row.target_rep_id && row.target_rep_id !== repId) return;
       // Don't ring while in wrap_up / on_call / offline.
       if (!repAvailable) return;
+      // Smart routing: if a preferred rep is set and the grace window has
+      // not expired, only that rep should ring. Once preferred_until passes
+      // anyone can claim it.
+      if (row.preferred_rep_id && row.preferred_rep_id !== repId) {
+        const until = row.preferred_until ? new Date(row.preferred_until).getTime() : 0;
+        if (until && Date.now() < until) return;
+      }
       const ageMs = row.enqueued_at ? Date.now() - new Date(row.enqueued_at).getTime() : 0;
       if (ageMs > STALE_MS) {
         addLog(`Skipping stale ring (${Math.round(ageMs / 1000)}s old, id=${row.id})`);
@@ -412,7 +419,7 @@ export default function Softphone({ token, projectId, host, identity, repId, onC
         }
         const { data, error } = await supabase
           .from('call_queue')
-          .select('id, queue_name, from_number, caller_name, target_rep_id, status, enqueued_at, priority_at')
+          .select('id, queue_name, from_number, caller_name, target_rep_id, status, enqueued_at, priority_at, preferred_rep_id, preferred_until')
           .eq('status', 'waiting')
           .or(`target_rep_id.eq.${repId},target_rep_id.is.null`)
           .order('priority_at', { ascending: true })

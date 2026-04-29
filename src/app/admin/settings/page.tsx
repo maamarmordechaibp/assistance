@@ -6,6 +6,7 @@ import { Settings, Save, Loader2, Upload, Trash2, Play } from 'lucide-react';
 import { edgeFn } from '@/lib/supabase/edge';
 import { PageHeader } from '@/components/ui/page';
 import { createClient } from '@/lib/supabase/client';
+import AdminPhoneNumbers from '@/components/admin/AdminPhoneNumbers';
 
 interface Setting {
   id: string;
@@ -112,7 +113,10 @@ export default function AdminSettings() {
       ['minute_announcement_enabled', 'minute_announcement_text'].includes(s.key)
     ),
     'AI': settings.filter(s =>
-      ['ai_analysis_enabled'].includes(s.key)
+      ['ai_analysis_enabled', 'behavior_moderation_enabled', 'smart_routing_enabled'].includes(s.key)
+    ),
+    'Critical Alerts': settings.filter(s =>
+      ['admin_phone_alert_throttle_seconds'].includes(s.key)
     ),
   };
 
@@ -131,6 +135,8 @@ export default function AdminSettings() {
           setEditValues(prev => ({ ...prev, hold_music_url: url }));
         }}
       />
+
+      <AdminPhoneNumbers />
 
       {Object.entries(groups).map(([group, items]) => (
         <div key={group} className="bg-card rounded-xl shadow-sm border">

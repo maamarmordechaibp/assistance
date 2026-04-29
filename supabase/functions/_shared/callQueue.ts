@@ -18,6 +18,12 @@ interface EnqueueParams {
    *  ORIGINAL enqueued_at of their previous call so they don't lose their
    *  place behind newer arrivals. Defaults to now() (i.e. back-of-line). */
   priorityAt?: string | null;
+  /** Smart routing: preferred rep gets first dibs for `preferredGraceSec`
+   *  seconds before the row becomes generally available. Non-exclusive. */
+  preferredRepId?: string | null;
+  preferredGraceSec?: number;
+  /** Optional category tag used by the preferred-rep selection logic. */
+  routingCategory?: string | null;
 }
 
 /** Insert a waiting row in call_queue and return the <Enqueue> LaML string.
@@ -63,6 +69,12 @@ export async function enqueueCaller(p: EnqueueParams): Promise<string> {
     target_rep_id: p.targetRepId ?? null,
   };
   if (priorityAt) insertRow.priority_at = priorityAt;
+  if (p.preferredRepId) {
+    const grace = Math.max(5, p.preferredGraceSec ?? 15);
+    insertRow.preferred_rep_id = p.preferredRepId;
+    insertRow.preferred_until = new Date(Date.now() + grace * 1000).toISOString();
+  }
+  if (p.routingCategory) insertRow.routing_category = p.routingCategory;
   const { data, error } = await supabase
     .from('call_queue')
     .insert(insertRow)

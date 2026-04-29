@@ -544,7 +544,60 @@ serve(async (req) => {
       repsToCall = allReps || [];
     }
 
-    console.log(`[sw-inbound] connect-rep: category=${category} found ${repsToCall.length} reps`);
+    // ── Smart routing: pick the best-performing available rep for the
+    // detected category and tag the queue row with preferred_rep_id. The
+    // preferred rep gets first dibs for `preferred_grace_seconds`; any
+    // available rep can claim afterwards. RLS still allows everyone to see
+    // the row so we don't risk dead-letter situations if the preferred
+    // rep's browser is wedged.
+    let preferredRepId: string | null = null;
+    let preferredGraceSec = 15;
+    if (category && repsToCall.length > 1) {
+      const { data: routingFlag } = await supabase
+        .from('admin_settings')
+        .select('value')
+        .eq('key', 'smart_routing_enabled')
+        .maybeSingle();
+      const enabled = routingFlag?.value === true || routingFlag?.value === 'true';
+      if (enabled) {
+        // Map free-text category to task_category_id (best-effort).
+        const { data: catRow } = await supabase
+          .from('task_categories')
+          .select('id, name')
+          .ilike('name', `%${category}%`)
+          .limit(1)
+          .maybeSingle();
+        if (catRow?.id) {
+          const repIds = repsToCall.map((r) => r.id);
+          const { data: skills } = await supabase
+            .from('rep_skill_stats')
+            .select('rep_id, avg_duration_seconds, resolution_rate, call_count')
+            .eq('task_category_id', catRow.id)
+            .in('rep_id', repIds);
+          if (skills && skills.length > 0) {
+            // Score: lower duration & higher resolution = better. Require
+            // at least 3 calls of history to be considered.
+            const scored = skills
+              .filter((s) => (s.call_count || 0) >= 3)
+              .map((s) => ({
+                rep_id: s.rep_id,
+                score: (Number(s.resolution_rate ?? 0.5) * 1000)
+                  - (s.avg_duration_seconds || 0) / 60,
+              }))
+              .sort((a, b) => b.score - a.score);
+            if (scored.length > 0) preferredRepId = scored[0].rep_id;
+          }
+        }
+        const { data: graceSetting } = await supabase
+          .from('admin_settings')
+          .select('value')
+          .eq('key', 'smart_routing_grace_seconds')
+          .maybeSingle();
+        if (graceSetting?.value) preferredGraceSec = Number(graceSetting.value) || preferredGraceSec;
+      }
+    }
+
+    console.log(`[sw-inbound] connect-rep: category=${category} reps=${repsToCall.length} preferred=${preferredRepId ?? 'none'}`);
     if (repsToCall.length > 0) {
       elements.push(laml.say('Connecting you to the next available representative. Please hold.'));
     } else {
@@ -552,7 +605,12 @@ serve(async (req) => {
     }
     // Either way the caller parks in the general queue; any rep whose browser
     // is connected can claim them. Reps see the row via Supabase Realtime.
-    elements.push(await enqueueCaller({ callSid, from, customerId, baseUrl }));
+    elements.push(await enqueueCaller({
+      callSid, from, customerId, baseUrl,
+      preferredRepId,
+      preferredGraceSec,
+      routingCategory: category || null,
+    }));
     return new Response(laml.buildLamlResponse(elements), { headers: { 'Content-Type': 'application/xml' } });
   }
 

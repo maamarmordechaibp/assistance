@@ -1,11 +1,11 @@
 "use client";
 import { useEffect, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { edgeFn } from '@/lib/supabase/edge';
 const supabase = createClient();
 
 const RAW_SMS_NUMBER = process.env.NEXT_PUBLIC_SMS_RECEIVE_NUMBER ?? '+18459357587';
 const DISPLAY_SMS_NUMBER = RAW_SMS_NUMBER.replace(/\+1(\d{3})(\d{3})(\d{4})/, '+1 ($1) $2-$3');
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 
 interface SmsRow {
   id: string;
@@ -45,11 +45,8 @@ export default function RepSmsPage() {
     }
     setSending(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
-      const res = await fetch(`${SUPABASE_URL}/functions/v1/sms-send`, {
+      const res = await edgeFn('sms-send', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ to: composeTo.trim(), message: composeMsg.trim(), mediaUrl: composeMedia.trim() || undefined }),
       });
       const data = await res.json();
