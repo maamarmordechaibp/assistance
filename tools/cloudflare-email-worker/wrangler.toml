@@ -1,0 +1,11 @@
+name = "offlinesbrowse-email"
+main = "src/worker.ts"
+compatibility_date = "2025-09-01"
+
+# Cloudflare Email Routing dispatches incoming mail to the `email` handler.
+# Bind the worker to a routing rule in the dashboard (Email → Email Routing
+# → Routes → "Send to a Worker").
+
+# Secrets — set with:
+#   wrangler secret put INBOUND_URL
+#   wrangler secret put EMAIL_INBOUND_SECRET
