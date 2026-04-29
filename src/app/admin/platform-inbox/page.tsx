@@ -606,28 +606,28 @@ export default function PlatformInboxPage() {
                   }
                   return (
                     <div className="space-y-3">
-                      <p className="text-muted-foreground italic">No body content.</p>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={async () => {
-                          try {
-                            const res = await edgeFn('platform-email-refetch-body', { id: selected.id });
-                            const j = await res.json();
-                            if (j?.results?.[0]?.ok) {
-                              toast.success('Body fetched');
-                              load();
-                            } else {
-                              toast.error('Could not fetch: ' + (j?.results?.[0]?.reason || j?.error || 'unknown'));
-                            }
-                          } catch (err) {
-                            toast.error('Refetch failed: ' + String(err));
-                          }
-                        }}
-                      >
-                        <RefreshCw className="size-3.5 mr-1.5" />
-                        Fetch from provider
-                      </Button>
+                      <p className="text-muted-foreground italic">
+                        No body content was delivered by the email provider.
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        The inbound webhook only contained metadata
+                        (subject, sender, recipients) — no <code>text</code> or
+                        <code> html</code> field. This usually means the
+                        Resend Inbound webhook is configured to send
+                        notifications only. Check your Resend dashboard
+                        webhook settings, or switch to Postmark / Cloudflare
+                        Email Routing for full-body inbound.
+                      </p>
+                      {selected.raw_payload && (
+                        <details className="text-xs">
+                          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                            View raw webhook payload
+                          </summary>
+                          <pre className="mt-2 p-3 bg-muted rounded overflow-x-auto text-[11px]">
+                            {JSON.stringify(selected.raw_payload, null, 2)}
+                          </pre>
+                        </details>
+                      )}
                     </div>
                   );
                 })()}
