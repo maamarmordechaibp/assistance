@@ -29,6 +29,9 @@ import {
   Loader2,
   KeyRound,
   Link as LinkIcon,
+  Forward as ForwardIcon,
+  Trash2,
+  CheckCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -42,6 +45,7 @@ interface CustomerLite {
   full_name: string | null;
   primary_phone: string | null;
   assigned_email: string | null;
+  personal_email?: string | null;
 }
 
 interface EmailRow {
@@ -63,6 +67,9 @@ interface EmailRow {
   is_read: boolean;
   starred: boolean;
   received_at: string;
+  forwarded_at: string | null;
+  forwarded_to: string | null;
+  deleted_at: string | null;
   customer?: CustomerLite | null;
 }
 
@@ -283,14 +290,17 @@ export interface EmailInboxProps {
   /** view label/icon for header */
   title?: string;
   description?: string;
+  /** when true, exposes Trash view + Restore + Permanent delete (admin-only) */
+  isAdmin?: boolean;
 }
 
-export default function EmailInbox({ customerId, title, description }: EmailInboxProps) {
+export default function EmailInbox({ customerId, title, description, isAdmin = false }: EmailInboxProps) {
   const supabase = useMemo(() => createClient(), []);
   const [emails, setEmails] = useState<EmailRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'unread' | 'inbound' | 'outbound' | 'otp'>('all');
+  const [showTrash, setShowTrash] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeCustomer, setComposeCustomer] = useState<CustomerLite | null>(null);
@@ -302,10 +312,12 @@ export default function EmailInbox({ customerId, title, description }: EmailInbo
     let q = supabase
       .from('customer_emails')
       .select(
-        'id, customer_id, mailbox, direction, from_address, from_name, to_addresses, cc_addresses, reply_to, subject, text_body, html_body, snippet, detected_otp, message_id, is_read, starred, received_at, customer:customers ( id, full_name, primary_phone, assigned_email )'
+        'id, customer_id, mailbox, direction, from_address, from_name, to_addresses, cc_addresses, reply_to, subject, text_body, html_body, snippet, detected_otp, message_id, is_read, starred, received_at, forwarded_at, forwarded_to, deleted_at, customer:customers ( id, full_name, primary_phone, assigned_email, personal_email )'
       )
       .order('received_at', { ascending: false })
       .limit(200);
+    if (showTrash && isAdmin) q = q.not('deleted_at', 'is', null);
+    else q = q.is('deleted_at', null);
     if (customerId) q = q.eq('customer_id', customerId);
     const { data, error } = await q;
     if (error) {
@@ -314,7 +326,7 @@ export default function EmailInbox({ customerId, title, description }: EmailInbo
       setEmails((data as unknown as EmailRow[]) || []);
     }
     setLoading(false);
-  }, [supabase, customerId]);
+  }, [supabase, customerId, showTrash, isAdmin]);
 
   useEffect(() => {
     load();
@@ -378,6 +390,86 @@ export default function EmailInbox({ customerId, title, description }: EmailInbo
     const { error } = await supabase.from('customer_emails').update({ starred }).eq('id', id);
     if (error) toast.error('Update failed');
     else setEmails((rows) => rows.map((r) => (r.id === id ? { ...r, starred } : r)));
+  };
+
+  const forwardEmail = async (row: EmailRow, opts?: { force?: boolean }) => {
+    if (row.direction !== 'inbound') {
+      toast.error('Only inbound emails can be forwarded');
+      return;
+    }
+    if (!row.customer?.personal_email) {
+      toast.error("Customer has no personal email on file. Add it on the customer's page first.");
+      return;
+    }
+    if (row.forwarded_at && !opts?.force) {
+      const ok = window.confirm(
+        `Already forwarded to ${row.forwarded_to || row.customer.personal_email} on ${formatDateTime(row.forwarded_at)}.\n\nForward again?`,
+      );
+      if (!ok) return;
+    }
+    const tid = toast.loading(`Forwarding to ${row.customer.personal_email}…`);
+    try {
+      const res = await edgeFn('email-forward', {
+        method: 'POST',
+        body: JSON.stringify({ email_id: row.id, force: Boolean(opts?.force || row.forwarded_at) }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(json?.error || `Forward failed (${res.status})`, { id: tid });
+        return;
+      }
+      toast.success(`Forwarded to ${json.forwarded_to || row.customer.personal_email}`, { id: tid });
+      setEmails((rows) =>
+        rows.map((r) =>
+          r.id === row.id
+            ? { ...r, forwarded_at: json.forwarded_at || new Date().toISOString(), forwarded_to: json.forwarded_to || r.customer?.personal_email || null }
+            : r,
+        ),
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err), { id: tid });
+    }
+  };
+
+  const deleteEmail = async (row: EmailRow) => {
+    if (!window.confirm('Delete this email? Reps cannot recover it — only admins can permanently remove or restore.')) return;
+    const { error } = await supabase
+      .from('customer_emails')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('id', row.id);
+    if (error) {
+      toast.error('Delete failed: ' + error.message);
+      return;
+    }
+    toast.success('Email moved to trash');
+    setEmails((rows) => rows.filter((r) => r.id !== row.id));
+    if (selectedId === row.id) setSelectedId(null);
+  };
+
+  const restoreEmail = async (row: EmailRow) => {
+    const { error } = await supabase
+      .from('customer_emails')
+      .update({ deleted_at: null, deleted_by: null })
+      .eq('id', row.id);
+    if (error) {
+      toast.error('Restore failed: ' + error.message);
+      return;
+    }
+    toast.success('Email restored');
+    setEmails((rows) => rows.filter((r) => r.id !== row.id));
+    if (selectedId === row.id) setSelectedId(null);
+  };
+
+  const permanentDelete = async (row: EmailRow) => {
+    if (!window.confirm('Permanently delete this email? This cannot be undone.')) return;
+    const { error } = await supabase.from('customer_emails').delete().eq('id', row.id);
+    if (error) {
+      toast.error('Permanent delete failed: ' + error.message);
+      return;
+    }
+    toast.success('Email permanently deleted');
+    setEmails((rows) => rows.filter((r) => r.id !== row.id));
+    if (selectedId === row.id) setSelectedId(null);
   };
 
   const onSelect = (row: EmailRow) => {
@@ -466,6 +558,16 @@ export default function EmailInbox({ customerId, title, description }: EmailInbo
                 {f === 'otp' ? `OTP (${otpCount})` : f}
               </Button>
             ))}
+            {isAdmin && (
+              <Button
+                size="sm"
+                variant={showTrash ? 'destructive' : 'outline'}
+                onClick={() => { setShowTrash((v) => !v); setSelectedId(null); }}
+                title={showTrash ? 'Back to inbox' : 'Show deleted emails'}
+              >
+                <Trash2 /> {showTrash ? 'Trash (viewing)' : 'Trash'}
+              </Button>
+            )}
           </div>
         </div>
       </Card>
@@ -612,10 +714,43 @@ export default function EmailInbox({ customerId, title, description }: EmailInbo
                         {selected.is_read ? <Mail /> : <MailOpen />}
                       </Button>
                     </div>
-                    {selected.direction === 'inbound' && (
-                      <Button size="sm" variant="accent" onClick={() => startReply(selected)}>
-                        <Reply /> Reply
+                    {selected.direction === 'inbound' && !showTrash && (
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <Button size="sm" variant="accent" onClick={() => startReply(selected)}>
+                          <Reply /> Reply
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => forwardEmail(selected)}
+                          disabled={!selected.customer?.personal_email}
+                          title={
+                            selected.customer?.personal_email
+                              ? `Forward to ${selected.customer.personal_email}`
+                              : 'Customer has no personal email on file'
+                          }
+                        >
+                          <ForwardIcon /> {selected.forwarded_at ? 'Forward again' : 'Forward'}
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => deleteEmail(selected)} title="Delete">
+                          <Trash2 /> Delete
+                        </Button>
+                      </div>
+                    )}
+                    {selected.direction === 'outbound' && !showTrash && (
+                      <Button size="sm" variant="ghost" onClick={() => deleteEmail(selected)} title="Delete">
+                        <Trash2 /> Delete
                       </Button>
+                    )}
+                    {showTrash && isAdmin && (
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <Button size="sm" variant="outline" onClick={() => restoreEmail(selected)}>
+                          <CheckCircle /> Restore
+                        </Button>
+                        <Button size="sm" variant="destructive" onClick={() => permanentDelete(selected)}>
+                          <Trash2 /> Permanently delete
+                        </Button>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -632,6 +767,17 @@ export default function EmailInbox({ customerId, title, description }: EmailInbo
                     <Button size="sm" variant="outline" onClick={() => copy(selected.detected_otp!)}>
                       <Copy /> Copy
                     </Button>
+                  </div>
+                )}
+
+                {selected.forwarded_at && (
+                  <div className="mt-3 flex items-center gap-2 rounded-md border border-success/30 bg-success/10 px-3 py-2 text-sm">
+                    <CheckCircle className="size-4 text-success" />
+                    <span>
+                      Forwarded to{' '}
+                      <strong>{selected.forwarded_to || selected.customer?.personal_email}</strong>{' '}
+                      on {formatDateTime(selected.forwarded_at)}
+                    </span>
                   </div>
                 )}
 

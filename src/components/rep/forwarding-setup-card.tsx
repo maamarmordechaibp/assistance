@@ -17,16 +17,24 @@
 
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { Mail, Copy, CheckCircle2, Clock, ChevronDown, ChevronRight } from 'lucide-react';
+import { Mail, Copy, CheckCircle2, Clock, ChevronDown, ChevronRight, Forward, Plus, X } from 'lucide-react';
 import { edgeFn } from '@/lib/supabase/edge';
 import { formatDateTime } from '@/lib/utils';
+
+type AutoForwardMode = 'off' | 'all' | 'allowlist';
 
 interface Props {
   customerId: string;
   assignedEmail: string | null;
   personalEmail: string | null;
   forwardingVerifiedAt: string | null;
-  onUpdate?: (next: { personal_email: string | null }) => void;
+  autoForwardMode?: AutoForwardMode | null;
+  autoForwardSenders?: string[] | null;
+  onUpdate?: (next: {
+    personal_email?: string | null;
+    auto_forward_mode?: AutoForwardMode;
+    auto_forward_senders?: string[];
+  }) => void;
   /** Compact = no instructions block by default; rep can expand. */
   compact?: boolean;
 }
@@ -36,6 +44,8 @@ export default function ForwardingSetupCard({
   assignedEmail,
   personalEmail,
   forwardingVerifiedAt,
+  autoForwardMode,
+  autoForwardSenders,
   onUpdate,
   compact = true,
 }: Props) {
@@ -43,6 +53,10 @@ export default function ForwardingSetupCard({
   const [draft, setDraft] = useState(personalEmail ?? '');
   const [saving, setSaving] = useState(false);
   const [showSteps, setShowSteps] = useState(!compact);
+  const [mode, setMode] = useState<AutoForwardMode>(autoForwardMode || 'off');
+  const [senders, setSenders] = useState<string[]>(autoForwardSenders || []);
+  const [newSender, setNewSender] = useState('');
+  const [savingAuto, setSavingAuto] = useState(false);
 
   const verified = !!forwardingVerifiedAt;
 
@@ -79,6 +93,60 @@ export default function ForwardingSetupCard({
     } catch {
       toast.error('Copy failed');
     }
+  };
+
+  const saveAutoForward = async (nextMode: AutoForwardMode, nextSenders: string[]) => {
+    setSavingAuto(true);
+    try {
+      const res = await edgeFn('customers', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          id: customerId,
+          autoForwardMode: nextMode,
+          autoForwardSenders: nextSenders,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast.error(body?.error || 'Failed to save auto-forward settings');
+        return false;
+      }
+      const data = await res.json();
+      setMode((data.auto_forward_mode as AutoForwardMode) || nextMode);
+      setSenders((data.auto_forward_senders as string[]) || nextSenders);
+      onUpdate?.({
+        auto_forward_mode: (data.auto_forward_mode as AutoForwardMode) || nextMode,
+        auto_forward_senders: (data.auto_forward_senders as string[]) || nextSenders,
+      });
+      toast.success('Auto-forward saved');
+      return true;
+    } finally {
+      setSavingAuto(false);
+    }
+  };
+
+  const onModeChange = async (next: AutoForwardMode) => {
+    if (next !== 'off' && !personalEmail) {
+      toast.error("Add the customer's personal email first");
+      return;
+    }
+    await saveAutoForward(next, senders);
+  };
+
+  const addSender = async () => {
+    const v = newSender.trim().toLowerCase();
+    if (!v) return;
+    if (senders.includes(v)) {
+      toast.error('Already in the list');
+      return;
+    }
+    const next = [...senders, v];
+    setNewSender('');
+    await saveAutoForward(mode, next);
+  };
+
+  const removeSender = async (s: string) => {
+    await saveAutoForward(mode, senders.filter((x) => x !== s));
   };
 
   return (
@@ -161,6 +229,89 @@ export default function ForwardingSetupCard({
           )}
         </div>
       </div>
+
+      {/* Auto-forward to personal email */}
+      {personalEmail && (
+        <div className="border-t pt-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Forward className="w-4 h-4 text-accent" />
+              <div>
+                <p className="text-xs font-semibold">Auto-forward inbound emails</p>
+                <p className="text-[11px] text-muted-foreground">
+                  Automatically forward emails received here to{' '}
+                  <span className="font-mono">{personalEmail}</span>.
+                </p>
+              </div>
+            </div>
+            <select
+              value={mode}
+              onChange={(e) => onModeChange(e.target.value as AutoForwardMode)}
+              disabled={savingAuto}
+              className="rounded border bg-background px-2 py-1 text-xs disabled:opacity-50"
+            >
+              <option value="off">Off</option>
+              <option value="all">All inbound</option>
+              <option value="allowlist">Only specific senders…</option>
+            </select>
+          </div>
+
+          {mode === 'allowlist' && (
+            <div className="mt-3 space-y-2">
+              <div className="flex flex-wrap gap-1.5">
+                {senders.length === 0 ? (
+                  <span className="text-[11px] italic text-muted-foreground">
+                    No senders yet — add a domain like <span className="font-mono">amazon.com</span> or a full address.
+                  </span>
+                ) : (
+                  senders.map((s) => (
+                    <span
+                      key={s}
+                      className="inline-flex items-center gap-1 rounded-full border bg-muted/40 px-2 py-0.5 text-[11px] font-mono"
+                    >
+                      {s}
+                      <button
+                        type="button"
+                        onClick={() => removeSender(s)}
+                        disabled={savingAuto}
+                        className="text-muted-foreground hover:text-destructive disabled:opacity-50"
+                        aria-label={`Remove ${s}`}
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))
+                )}
+              </div>
+              <div className="flex items-center gap-1">
+                <input
+                  value={newSender}
+                  onChange={(e) => setNewSender(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      void addSender();
+                    }
+                  }}
+                  placeholder="amazon.com or noreply@walmart.com"
+                  className="flex-1 rounded border bg-background px-2 py-1 font-mono text-xs"
+                />
+                <button
+                  type="button"
+                  onClick={addSender}
+                  disabled={savingAuto || !newSender.trim()}
+                  className="inline-flex items-center gap-1 rounded bg-accent px-2 py-1 text-xs font-medium text-accent-foreground disabled:opacity-50"
+                >
+                  <Plus className="w-3 h-3" /> Add
+                </button>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                A domain matches any address ending with it (e.g. <span className="font-mono">amazon.com</span> matches <span className="font-mono">noreply@amazon.com</span>).
+              </p>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Steps */}
       {assignedEmail && (

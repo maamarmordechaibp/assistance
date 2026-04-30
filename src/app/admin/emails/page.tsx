@@ -56,6 +56,7 @@ export default function AdminEmailsPage() {
         key={refreshKey}
         title="Email activity"
         description="All inbound and outbound customer-mailbox messages across the platform."
+        isAdmin
       />
     </div>
   );

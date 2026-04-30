@@ -76,6 +76,21 @@ serve(async (req) => {
     if (updates.status !== undefined) dbUpdates.status = updates.status;
     if (updates.preferredRepId !== undefined) dbUpdates.preferred_rep_id = updates.preferredRepId || null;
     if (updates.personalEmail !== undefined) dbUpdates.personal_email = updates.personalEmail || null;
+    if (updates.autoForwardMode !== undefined) {
+      const m = String(updates.autoForwardMode);
+      if (!['off', 'all', 'allowlist'].includes(m)) {
+        return new Response(JSON.stringify({ error: 'autoForwardMode must be off|all|allowlist' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+      dbUpdates.auto_forward_mode = m;
+    }
+    if (updates.autoForwardSenders !== undefined) {
+      if (!Array.isArray(updates.autoForwardSenders)) {
+        return new Response(JSON.stringify({ error: 'autoForwardSenders must be an array of strings' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+      dbUpdates.auto_forward_senders = updates.autoForwardSenders
+        .map((s: unknown) => String(s).trim().toLowerCase())
+        .filter((s: string) => s.length > 0);
+    }
 
     const { data, error } = await supabase.from('customers').update(dbUpdates).eq('id', id).select().single();
     if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });

@@ -33,6 +33,8 @@ interface Customer {
   assigned_email: string | null;
   personal_email: string | null;
   forwarding_verified_at: string | null;
+  auto_forward_mode?: 'off' | 'all' | 'allowlist' | null;
+  auto_forward_senders?: string[] | null;
   address: string | null;
   internal_notes: string | null;
   status: string;
@@ -410,7 +412,16 @@ export default function AdminCustomerDetail() {
         assignedEmail={customer.assigned_email}
         personalEmail={customer.personal_email}
         forwardingVerifiedAt={customer.forwarding_verified_at}
-        onUpdate={(next) => setCustomer({ ...customer, personal_email: next.personal_email })}
+        autoForwardMode={customer.auto_forward_mode ?? 'off'}
+        autoForwardSenders={customer.auto_forward_senders ?? []}
+        onUpdate={(next) =>
+          setCustomer({
+            ...customer,
+            personal_email: next.personal_email !== undefined ? next.personal_email : customer.personal_email,
+            auto_forward_mode: next.auto_forward_mode ?? customer.auto_forward_mode,
+            auto_forward_senders: next.auto_forward_senders ?? customer.auto_forward_senders,
+          })
+        }
       />
 
       {/* Phone Aliases */}

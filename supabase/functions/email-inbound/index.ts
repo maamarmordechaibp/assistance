@@ -576,7 +576,78 @@ serve(async (req) => {
     }
   }
 
-  return new Response(JSON.stringify({ ok: true, id: row?.id, customer_id: customerId, otp: detected_otp, ingest: ingestSummary }), {
+  // ── Auto-forward to customer's personal_email when configured ──
+  // Best-effort: never blocks the webhook response. Failures are logged.
+  let autoForwardSummary: { invoked: boolean; reason?: string } = { invoked: false };
+  if (row?.id && customerId) {
+    try {
+      const { data: cust } = await supabase
+        .from('customers')
+        .select('auto_forward_mode, auto_forward_senders, personal_email')
+        .eq('id', customerId)
+        .maybeSingle();
+
+      const mode = (cust?.auto_forward_mode as string | null) ?? 'off';
+      const personal = (cust?.personal_email as string | null) ?? null;
+      const senders = (cust?.auto_forward_senders as string[] | null) ?? [];
+      const fromAddr = (normalized.from_address || '').toLowerCase();
+
+      let shouldForward = false;
+      let reason = 'mode_off';
+      if (!personal) reason = 'no_personal_email';
+      else if (mode === 'all') { shouldForward = true; reason = 'mode_all'; }
+      else if (mode === 'allowlist' && senders.length > 0 && fromAddr) {
+        const match = senders.some((entry) => {
+          const e = String(entry || '').trim().toLowerCase();
+          if (!e) return false;
+          // Match either an exact address or a domain suffix.
+          return fromAddr === e || fromAddr.endsWith('@' + e) || fromAddr.endsWith('.' + e);
+        });
+        shouldForward = match;
+        reason = match ? 'allowlist_hit' : 'allowlist_miss';
+      } else if (mode === 'allowlist') {
+        reason = 'allowlist_empty';
+      }
+
+      if (shouldForward) {
+        const supabaseUrl = Deno.env.get('SUPABASE_URL');
+        const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+        if (supabaseUrl && serviceKey) {
+          const fwdRes = await fetch(`${supabaseUrl}/functions/v1/email-forward`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${serviceKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ email_id: row.id, automatic: true }),
+          });
+          autoForwardSummary = { invoked: true, reason };
+          if (!fwdRes.ok) {
+            const txt = await fwdRes.text().catch(() => '');
+            console.error(`[email-inbound] auto-forward failed (${fwdRes.status}): ${txt.slice(0, 300)}`);
+          } else {
+            console.log(`[email-inbound] auto-forwarded email=${row.id} to ${personal} (${reason})`);
+          }
+        } else {
+          console.error('[email-inbound] cannot auto-forward: SUPABASE_URL / SERVICE_ROLE_KEY missing');
+          autoForwardSummary = { invoked: false, reason: 'missing_env' };
+        }
+      } else {
+        autoForwardSummary = { invoked: false, reason };
+      }
+    } catch (err) {
+      console.error('[email-inbound] auto-forward error:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  return new Response(JSON.stringify({
+    ok: true,
+    id: row?.id,
+    customer_id: customerId,
+    otp: detected_otp,
+    ingest: ingestSummary,
+    auto_forward: autoForwardSummary,
+  }), {
     headers: { 'Content-Type': 'application/json' },
   });
 });
