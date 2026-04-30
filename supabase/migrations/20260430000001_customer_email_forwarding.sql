@@ -22,8 +22,7 @@ ALTER TABLE customers
 COMMENT ON COLUMN customers.auto_forward_mode IS
   'Auto-forward behaviour for inbound customer_emails. off|all|allowlist.';
 COMMENT ON COLUMN customers.auto_forward_senders IS
-  'When auto_forward_mode=allowlist, only forward emails whose from_address ' ||
-  'ends with one of these entries (e.g. ''amazon.com'' or ''noreply@walmart.com'').';
+  'When auto_forward_mode=allowlist, only forward emails whose from_address ends with one of these entries (e.g. ''amazon.com'' or ''noreply@walmart.com'').';
 
 ALTER TABLE customer_emails
   ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ,
