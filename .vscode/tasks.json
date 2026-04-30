@@ -1,0 +1,52 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Push & deploy",
+      "type": "shell",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "node scripts/sync-launcher.mjs; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; git add -A; $changed = git status --porcelain; if (-not $changed) { Write-Host 'Nothing to commit. Pushing existing commits...' -ForegroundColor Yellow; git push; exit $LASTEXITCODE }; git commit -m '${input:commitMessage}'; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; git push"
+      ],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "detail": "Sync launcher, commit all changes, push to GitHub (Vercel auto-deploys)."
+    },
+    {
+      "label": "Sync launcher.ps1",
+      "type": "shell",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "command": "node",
+      "args": ["scripts/sync-launcher.mjs"],
+      "problemMatcher": [],
+      "detail": "Copy tools/offline-browser-launcher/launcher.ps1 → public/launcher/launcher.ps1."
+    }
+  ],
+  "inputs": [
+    {
+      "id": "commitMessage",
+      "type": "promptString",
+      "description": "Commit message",
+      "default": "chore: update"
+    }
+  ]
+}

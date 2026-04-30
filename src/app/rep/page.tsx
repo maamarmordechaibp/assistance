@@ -10,6 +10,7 @@ import OrdersPanel from '@/components/rep/orders-panel';
 import EmailInbox from '@/components/rep/email-inbox';
 import ForwardingSetupCard from '@/components/rep/forwarding-setup-card';
 import BrowserLockBadge from '@/components/rep/browser-lock-badge';
+import { LauncherSetup } from '@/components/rep/launcher-setup';
 import {
   Phone,
   PhoneOff,
@@ -118,6 +119,7 @@ export default function RepDashboard() {
   const [selectedCategory, setSelectedCategory] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [launcherSetupOpen, setLauncherSetupOpen] = useState(false);
   const [webrtcToken, setWebrtcToken] = useState<string | null>(null);
   const [signalwireProjectId, setSignalwireProjectId] = useState<string | null>(null);
   const [signalwireSpaceUrl, setSignalwireSpaceUrl] = useState<string | null>(null);
@@ -737,9 +739,13 @@ export default function RepDashboard() {
           : `Opened Chrome — ${label}`,
       );
     } catch (err) {
-      toast.error('Local browser launcher not running. Install it from tools/offline-browser-launcher.', {
+      toast.error('Customer Browser is not set up on this PC.', {
         description: String((err as Error).message || err),
-        duration: 8000,
+        duration: 10000,
+        action: {
+          label: 'Set up now',
+          onClick: () => setLauncherSetupOpen(true),
+        },
       });
     }
   };
@@ -870,6 +876,7 @@ export default function RepDashboard() {
 
   return (
     <div className="space-y-6">
+      <LauncherSetup open={launcherSetupOpen} onOpenChange={setLauncherSetupOpen} />
       {/* Status Bar */}
       <Card>
         <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">

@@ -1,0 +1,9 @@
+#!/bin/sh
+# Auto-push every commit so you never forget. Runs in the background
+# so it doesn't block your editor. If push fails (offline, conflicts),
+# the commit is still safely on disk — just run `git push` manually.
+
+(
+  git push >/dev/null 2>&1 || \
+    echo "[post-commit] auto-push failed — run 'git push' manually"
+) &
